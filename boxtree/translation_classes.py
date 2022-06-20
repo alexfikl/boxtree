@@ -33,17 +33,19 @@ THE SOFTWARE.
 """
 
 from functools import partial
+from dataclasses import dataclass
 
 import numpy as np
-from pytools import Record, memoize_method
-import pyopencl as cl
-import pyopencl.array  # noqa
-import pyopencl.cltypes  # noqa
-from pyopencl.elementwise import ElementwiseTemplate
+from pyopencl.elementwise import ElementwiseTemplate, ElementwiseKernel
+
+from arraycontext import Array
+from pytools import memoize_method
 from mako.template import Template
-from boxtree.tools import (DeviceDataRecord, InlineBinarySearch,
-        get_coord_vec_dtype, coord_vec_subscript_code)
-from boxtree.traversal import TRAVERSAL_PREAMBLE_MAKO_DEFS
+
+from boxtree.tools import (
+    InlineBinarySearch, get_coord_vec_dtype, coord_vec_subscript_code)
+from boxtree.traversal import TRAVERSAL_PREAMBLE_MAKO_DEFS, FMMTraversalInfo
+from boxtree.array_context import PyOpenCLArrayContext, dataclass_array_container
 
 import logging
 logger = logging.getLogger(__name__)
@@ -177,11 +179,14 @@ TRANSLATION_CLASS_FINDER_TEMPLATE = ElementwiseTemplate(
     """)
 
 
-class _KernelInfo(Record):
-    pass
+@dataclass(frozen=True)
+class _KernelInfo:
+    translation_class_finder: ElementwiseKernel
 
 
-class TranslationClassesInfo(DeviceDataRecord):
+@dataclass_array_container
+@dataclass(frozen=True)
+class TranslationClassesInfo:
     r"""Interaction lists to help with for translations that benefit from
     precomputing distance related values
 
@@ -218,13 +223,10 @@ class TranslationClassesInfo(DeviceDataRecord):
         traversal that these translation classes refer to.
     """
 
-    def __init__(self, traversal, **kwargs):
-        super().__init__(**kwargs)
-        self.traversal = traversal
-
-    def copy(self, **kwargs):
-        traversal = kwargs.pop("traversal", self.traversal)
-        return self.__class__(traversal=traversal, **self.get_copy_kwargs(**kwargs))
+    traversal: FMMTraversalInfo
+    from_sep_siblings_translation_classes: Array
+    from_sep_siblings_translation_class_to_distance_vector: Array
+    from_sep_siblings_translation_classes_level_starts: Array
 
     @property
     def nfrom_sep_siblings_translation_classes(self):
@@ -238,12 +240,21 @@ class TranslationClassesBuilder:
     .. automethod:: __call__
     """
 
-    def __init__(self, context):
-        self.context = context
+    def __init__(self, array_context: PyOpenCLArrayContext) -> None:
+        self._setup_actx = array_context
+
+    @property
+    def context(self):
+        return self._setup_actx.queue.context
 
     @memoize_method
-    def get_kernel_info(self, dimensions, well_sep_is_n_away,
-            box_id_dtype, box_level_dtype, coord_dtype, translation_class_per_level):
+    def get_kernel_info(self,
+            dimensions: int,
+            well_sep_is_n_away: int,
+            box_id_dtype: np.dtype,
+            box_level_dtype: np.dtype,
+            coord_dtype: np.dtype,
+            translation_class_per_level) -> None:
         coord_vec_dtype = get_coord_vec_dtype(coord_dtype, dimensions)
         int_coord_vec_dtype = get_coord_vec_dtype(np.dtype(np.int32), dimensions)
 
@@ -280,11 +291,13 @@ class TranslationClassesBuilder:
         return _KernelInfo(translation_class_finder=translation_class_finder)
 
     @staticmethod
-    def ntranslation_classes_per_level(well_sep_is_n_away, dimensions):
+    def ntranslation_classes_per_level(
+            well_sep_is_n_away: int, dimensions: int) -> int:
         return (4 * well_sep_is_n_away + 3) ** dimensions
 
-    def translation_class_to_normalized_vector(self, well_sep_is_n_away,
-            dimensions, cls):
+    def translation_class_to_normalized_vector(
+            self, well_sep_is_n_away: int, dimensions: int, cls: type
+            ) -> np.ndarray:
         # This computes the vector for the translation class, using the inverse
         # of the formula found in get_translation_class() defined in
         # TRANSLATION_CLASS_FINDER_PREAMBLE_TEMPLATE.
@@ -296,13 +309,15 @@ class TranslationClassesBuilder:
         for i in range(dimensions):
             result[i] = cls % base - shift
             cls //= base
+
         return result
 
-    def compute_translation_classes(self, queue, trav, tree, wait_for,
+    def compute_translation_classes(self,
+            actx: PyOpenCLArrayContext, trav, tree, wait_for,
             is_translation_per_level):
         """
-        Returns a tuple *evt*,  *translation_class_is_used* and
-        *translation_classes_lists*.
+        :returns: a :class:`tuple` containing *evt*, *translation_class_is_used*
+            and *translation_classes_lists*.
         """
 
         # {{{ compute translation classes for list 2
@@ -321,14 +336,11 @@ class TranslationClassesBuilder:
         if is_translation_per_level:
             ntranslation_classes = ntranslation_classes * tree.nlevels
 
-        translation_classes_lists = cl.array.empty(
-                queue, len(trav.from_sep_siblings_lists), dtype=np.int32)
+        translation_classes_lists = actx.empty(
+            len(trav.from_sep_siblings_lists), dtype=np.int32)
+        translation_class_is_used = actx.zeros(ntranslation_classes, dtype=np.int32)
 
-        translation_class_is_used = cl.array.zeros(
-                queue, ntranslation_classes, dtype=np.int32)
-
-        error_flag = cl.array.zeros(queue, 1, dtype=np.int32)
-
+        error_flag = actx.zeros(1, dtype=np.int32)
         evt = knl_info.translation_class_finder(
                 trav.from_sep_siblings_lists,
                 trav.from_sep_siblings_starts,
@@ -342,9 +354,10 @@ class TranslationClassesBuilder:
                 translation_classes_lists,
                 translation_class_is_used,
                 error_flag,
-                queue=queue, wait_for=wait_for)
+                queue=actx.queue,
+                wait_for=wait_for)
 
-        if (error_flag.get()):
+        if actx.to_numpy(error_flag)[0]:
             raise ValueError("could not compute translation classes")
 
         return (evt, translation_class_is_used, translation_classes_lists)
@@ -352,13 +365,13 @@ class TranslationClassesBuilder:
         # }}}
 
     @log_process(logger, "build m2l translation classes")
-    def __call__(self, queue, trav, tree, wait_for=None,
-                 is_translation_per_level=True):
+    def __call__(self, actx: PyOpenCLArrayContext,
+            trav, tree, wait_for=None, is_translation_per_level=True):
         """Returns a pair *info*, *evt* where info is a
         :class:`TranslationClassesInfo`.
         """
         evt, translation_class_is_used, translation_classes_lists = \
-            self.compute_translation_classes(queue, trav, tree, wait_for,
+            self.compute_translation_classes(actx, trav, tree, wait_for,
                                              is_translation_per_level)
 
         well_sep_is_n_away = trav.well_sep_is_n_away
@@ -378,7 +391,7 @@ class TranslationClassesBuilder:
         prev_level = -1
         from_sep_siblings_translation_classes_level_starts = \
             np.empty(nlevels+1, dtype=np.int32)
-        for i, used in enumerate(translation_class_is_used.get()):
+        for i, used in enumerate(actx.to_numpy(translation_class_is_used)):
             cls_without_level = i % num_translation_classes
             level = i // num_translation_classes
             if (prev_level != level):
@@ -396,14 +409,13 @@ class TranslationClassesBuilder:
 
         from_sep_siblings_translation_classes_level_starts[nlevels] = count
 
-        translation_classes_lists = (
-                cl.array.take(
-                    cl.array.to_device(queue, used_translation_classes_map),
-                    translation_classes_lists))
+        translation_classes_lists = actx.from_numpy(
+            used_translation_classes_map
+            )[translation_classes_lists]
 
-        distances = cl.array.to_device(queue, distances)
-        from_sep_siblings_translation_classes_level_starts = cl.array.to_device(
-            queue, from_sep_siblings_translation_classes_level_starts)
+        distances = actx.from_numpy(distances)
+        from_sep_siblings_translation_classes_level_starts = actx.from_numpy(
+            from_sep_siblings_translation_classes_level_starts)
 
         info = TranslationClassesInfo(
                 traversal=trav,
@@ -411,9 +423,9 @@ class TranslationClassesBuilder:
                 from_sep_siblings_translation_class_to_distance_vector=distances,
                 from_sep_siblings_translation_classes_level_starts=(
                     from_sep_siblings_translation_classes_level_starts),
-                ).with_queue(None)
+                )
 
-        return info, evt
+        return actx.freeze(info), evt
 
 # }}}
 

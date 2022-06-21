@@ -28,13 +28,14 @@ THE SOFTWARE.
 """
 
 from abc import ABC, abstractmethod
-import logging
-logger = logging.getLogger(__name__)
+
+from pytools import ProcessLogger
+
 from boxtree.tree import Tree
 from boxtree.traversal import FMMTraversalInfo
 
-
-from pytools import ProcessLogger
+import logging
+logger = logging.getLogger(__name__)
 
 
 # {{{ expansion wrangler interface
@@ -112,8 +113,9 @@ class ExpansionWranglerInterface(ABC):
     .. automethod:: finalize_potentials
     """
 
-    def __init__(self, tree_indep: TreeIndependentDataForWrangler,
-            traversal: FMMTraversalInfo):
+    def __init__(self,
+            tree_indep: TreeIndependentDataForWrangler,
+            traversal: FMMTraversalInfo) -> None:
         self.tree_indep = tree_indep
         self.traversal = traversal
 
@@ -263,7 +265,7 @@ class ExpansionWranglerInterface(ABC):
             :class:`boxtree.pyfmmlib_integration.FMMLibExpansionWrangler`
             uses :class:`numpy.ndarray` internally, this array can be used
             to help convert the output back to the user's array
-            type (typically :class:`pyopencl.array.Array`).
+            type.
         """
 
     def distribute_source_weights(self, src_weight_vecs, src_idx_all_ranks):

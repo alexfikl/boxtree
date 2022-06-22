@@ -21,13 +21,20 @@ THE SOFTWARE.
 """
 
 from functools import partial
+from dataclasses import dataclass
+from typing import Optional
+
 import numpy as np
-from pyopencl.elementwise import ElementwiseTemplate
-from pyopencl.scan import ScanTemplate
+from pyopencl.elementwise import ElementwiseTemplate, ElementwiseKernel
+from pyopencl.scan import ScanTemplate, GenericScanKernel
+
+from pytools import memoize, log_process
 from mako.template import Template
-from pytools import Record, memoize, log_process
-from boxtree.tools import (get_type_moniker, get_coord_vec_dtype,
-        coord_vec_subscript_code)
+
+from boxtree.tools import (
+    ScalarArg, VectorArg, get_type_moniker,
+    get_coord_vec_dtype, coord_vec_subscript_code)
+from boxtree.traversal import TRAVERSAL_PREAMBLE_MAKO_DEFS, HELPER_FUNCTION_TEMPLATE
 
 import logging
 logger = logging.getLogger(__name__)
@@ -114,8 +121,27 @@ logger = logging.getLogger(__name__)
 # -----------------------------------------------------------------------------
 
 
-class _KernelInfo(Record):
-    pass
+@dataclass(frozen=True)
+class _KernelInfo:
+    particle_id_dtype: np.dtype
+    box_id_dtype: np.dtype
+    morton_bin_count_dtype: np.dtype
+
+    morton_count_scan: GenericScanKernel
+    split_box_id_scan: GenericScanKernel
+    box_splitter_kernel: ElementwiseKernel
+    particle_renumberer_kernel: ElementwiseKernel
+    level_restrict: bool
+    level_restrict_kernel_builder: Optional[ElementwiseKernel]
+
+    extract_nonchild_srcntgt_count_kernel: Optional[ElementwiseKernel]
+    find_prune_indices_kernel: GenericScanKernel
+    find_level_box_counts_kernel: GenericScanKernel
+    srcntgt_permuter: ElementwiseKernel
+    source_counter: GenericScanKernel
+    source_and_target_index_finder: Optional[ElementwiseKernel]
+    box_info_kernel: ElementwiseKernel
+    box_extents_finder_kernel: ElementwiseKernel
 
 
 # {{{ data types
@@ -790,8 +816,6 @@ PARTICLE_RENUMBERER_KERNEL_TPL = Template(r"""//CL//
 
 # {{{ level restrict kernel
 
-from boxtree.traversal import TRAVERSAL_PREAMBLE_MAKO_DEFS
-
 LEVEL_RESTRICT_TPL = Template(
     TRAVERSAL_PREAMBLE_MAKO_DEFS + r"""//CL:mako//
     <%def name="my_load_center(name, box_id)">
@@ -922,9 +946,6 @@ def build_level_restrict_kernel(context, preamble_with_dtype_decls,
         get_coord_vec_dtype=get_coord_vec_dtype,
         cvec_sub=partial(coord_vec_subscript_code, dimensions),
         )
-
-    from boxtree.traversal import HELPER_FUNCTION_TEMPLATE
-    from pyopencl.elementwise import ElementwiseKernel
 
     return ElementwiseKernel(
             context,
@@ -1390,7 +1411,7 @@ def get_tree_build_kernel_info(context, dimensions, coord_dtype,
     if np.iinfo(box_id_dtype).min == 0:
         from warnings import warn
         warn("Careful with unsigned types for box_id_dtype. Some CL implementations "
-                "(notably Intel 2012) mis-implemnet unsigned operations, leading to "
+                "(notably Intel 2012) mis-implement unsigned operations, leading to "
                 "incorrect results.", stacklevel=4)
 
     from pyopencl.tools import dtype_to_c_struct, dtype_to_ctype
@@ -1461,7 +1482,6 @@ def get_tree_build_kernel_info(context, dimensions, coord_dtype,
             + str(MORTON_NR_SCAN_PREAMBLE_TPL.render(**codegen_args))
             )
 
-    from boxtree.tools import VectorArg, ScalarArg
     common_arguments = (
             [
                 # box-local morton bin counts for each particle at the current level
@@ -1523,7 +1543,6 @@ def get_tree_build_kernel_info(context, dimensions, coord_dtype,
             (ScalarArg(coord_dtype, "stick_out_factor"))
         ]
 
-    from pyopencl.scan import GenericScanKernel
     morton_count_scan = GenericScanKernel(
             context, morton_bin_count_dtype,
             arguments=morton_count_scan_arguments,
@@ -1548,7 +1567,6 @@ def get_tree_build_kernel_info(context, dimensions, coord_dtype,
 
     # {{{ split_box_id scan
 
-    from pyopencl.scan import GenericScanKernel
     split_box_id_scan = SPLIT_BOX_ID_SCAN_TPL.build(
             context,
             type_aliases=(
@@ -1583,7 +1601,6 @@ def get_tree_build_kernel_info(context, dimensions, coord_dtype,
 
     box_splitter_kernel_source = BOX_SPLITTER_KERNEL_TPL.render(**box_s_codegen_args)
 
-    from pyopencl.elementwise import ElementwiseKernel
     box_splitter_kernel = ElementwiseKernel(
             context,
             common_arguments
@@ -1618,7 +1635,6 @@ def get_tree_build_kernel_info(context, dimensions, coord_dtype,
     particle_renumberer_kernel_source = \
             PARTICLE_RENUMBERER_KERNEL_TPL.render(**codegen_args)
 
-    from pyopencl.elementwise import ElementwiseKernel
     particle_renumberer_kernel = ElementwiseKernel(
             context,
             common_arguments
@@ -1672,7 +1688,6 @@ def get_tree_build_kernel_info(context, dimensions, coord_dtype,
 
     # FIXME: Turn me into a scan template
 
-    from boxtree.tools import VectorArg
     find_prune_indices_kernel = GenericScanKernel(
             context, box_id_dtype,
             arguments=[
@@ -1746,7 +1761,6 @@ def get_tree_build_kernel_info(context, dimensions, coord_dtype,
     # really a loss.
 
     # FIXME: make me a scan template
-    from pyopencl.scan import GenericScanKernel
     source_counter = GenericScanKernel(
             context, box_id_dtype,
             arguments=[

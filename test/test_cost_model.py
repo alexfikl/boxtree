@@ -33,6 +33,7 @@ import numpy as np
 from arraycontext import pytest_generate_tests_for_array_contexts
 from boxtree.array_context import (                                 # noqa: F401
         PytestPyOpenCLArrayContextFactory, _acf)
+
 from boxtree.cost import FMMCostModel, _PythonFMMCostModel
 from boxtree.cost import make_pde_aware_translation_cost_model
 
@@ -58,8 +59,8 @@ def test_compare_cl_and_py_cost_model(actx_factory, nsources, ntargets, dims, dt
     # {{{ Generate sources, targets and target_radii
 
     from boxtree.tools import make_normal_particle_array as p_normal
-    sources = p_normal(actx.queue, nsources, dims, dtype, seed=15)
-    targets = p_normal(actx.queue, ntargets, dims, dtype, seed=18)
+    sources = p_normal(actx, nsources, dims, dtype, seed=15)
+    targets = p_normal(actx, ntargets, dims, dtype, seed=18)
 
     rng = np.random.default_rng(22)
     target_radii = rng.uniform(0.0, 0.05, (ntargets,)).astype(dtype)
@@ -69,16 +70,16 @@ def test_compare_cl_and_py_cost_model(actx_factory, nsources, ntargets, dims, dt
     # {{{ Generate tree and traversal
 
     from boxtree import TreeBuilder
-    tb = TreeBuilder(actx.context)
+    tb = TreeBuilder(actx)
     tree, _ = tb(
-        actx.queue, sources, targets=targets, target_radii=target_radii,
+        actx, sources, targets=targets, target_radii=target_radii,
         stick_out_factor=0.15, max_particles_in_box=30, debug=True
     )
 
     from boxtree.traversal import FMMTraversalBuilder
-    tg = FMMTraversalBuilder(actx.context, well_sep_is_n_away=2)
-    trav_dev, _ = tg(actx.queue, tree, debug=True)
-    trav = trav_dev.get(queue=actx.queue)
+    tg = FMMTraversalBuilder(actx, well_sep_is_n_away=2)
+    trav_dev, _ = tg(actx, tree, debug=True)
+    trav = actx.to_numpy(trav_dev)
 
     # }}}
 
@@ -106,12 +107,12 @@ def test_compare_cl_and_py_cost_model(actx_factory, nsources, ntargets, dims, dt
             context=constant_one_params
         )
     p2m_cost_dev = actx.from_numpy(p2m_cost)
-
     actx.queue.finish()
+
     start_time = time.time()
 
     cl_form_multipoles = cl_cost_model.process_form_multipoles(
-        actx.queue, trav_dev, p2m_cost_dev
+        actx, trav_dev, p2m_cost_dev
     )
 
     actx.queue.finish()
@@ -121,7 +122,7 @@ def test_compare_cl_and_py_cost_model(actx_factory, nsources, ntargets, dims, dt
     start_time = time.time()
 
     python_form_multipoles = python_cost_model.process_form_multipoles(
-        actx.queue, trav, p2m_cost
+        actx, trav, p2m_cost
     )
 
     logger.info("Python time for process_form_multipoles: %gs",
@@ -144,7 +145,7 @@ def test_compare_cl_and_py_cost_model(actx_factory, nsources, ntargets, dims, dt
     actx.queue.finish()
     start_time = time.time()
     cl_coarsen_multipoles = cl_cost_model.process_coarsen_multipoles(
-        actx.queue, trav_dev, m2m_cost_dev
+        actx, trav_dev, m2m_cost_dev
     )
 
     actx.queue.finish()
@@ -154,7 +155,7 @@ def test_compare_cl_and_py_cost_model(actx_factory, nsources, ntargets, dims, dt
     start_time = time.time()
 
     python_coarsen_multipoles = python_cost_model.process_coarsen_multipoles(
-        actx.queue, trav, m2m_cost
+        actx, trav, m2m_cost
     )
 
     logger.info("Python time for coarsen_multipoles: %gs",
@@ -170,10 +171,10 @@ def test_compare_cl_and_py_cost_model(actx_factory, nsources, ntargets, dims, dt
     start_time = time.time()
 
     cl_ndirect_sources_per_target_box = \
-        cl_cost_model.get_ndirect_sources_per_target_box(actx.queue, trav_dev)
+        cl_cost_model.get_ndirect_sources_per_target_box(actx, trav_dev)
 
     cl_direct = cl_cost_model.process_direct(
-        actx.queue, trav_dev, cl_ndirect_sources_per_target_box, 5.0
+        actx, trav_dev, cl_ndirect_sources_per_target_box, 5.0
     )
 
     actx.queue.finish()
@@ -183,10 +184,10 @@ def test_compare_cl_and_py_cost_model(actx_factory, nsources, ntargets, dims, dt
     start_time = time.time()
 
     python_ndirect_sources_per_target_box = \
-        python_cost_model.get_ndirect_sources_per_target_box(actx.queue, trav)
+        python_cost_model.get_ndirect_sources_per_target_box(actx, trav)
 
     python_direct = python_cost_model.process_direct(
-        actx.queue, trav, python_ndirect_sources_per_target_box, 5.0
+        actx, trav, python_ndirect_sources_per_target_box, 5.0
     )
 
     logger.info("Python time for process_direct: %gs",
@@ -200,7 +201,7 @@ def test_compare_cl_and_py_cost_model(actx_factory, nsources, ntargets, dims, dt
 
     start_time = time.time()
 
-    cl_direct_aggregate = cl_cost_model.aggregate_over_boxes(cl_direct)
+    cl_direct_aggregate = cl_cost_model.aggregate_over_boxes(actx, cl_direct)
 
     actx.queue.finish()
     logger.info("OpenCL time for aggregate_over_boxes: %gs",
@@ -208,7 +209,9 @@ def test_compare_cl_and_py_cost_model(actx_factory, nsources, ntargets, dims, dt
 
     start_time = time.time()
 
-    python_direct_aggregate = python_cost_model.aggregate_over_boxes(python_direct)
+    python_direct_aggregate = (
+        python_cost_model.aggregate_over_boxes(actx, python_direct)
+    )
 
     logger.info("Python time for aggregate_over_boxes: %gs",
             time.time() - start_time)
@@ -231,14 +234,14 @@ def test_compare_cl_and_py_cost_model(actx_factory, nsources, ntargets, dims, dt
     actx.queue.finish()
     start_time = time.time()
 
-    cl_m2l_cost = cl_cost_model.process_list2(actx.queue, trav_dev, m2l_cost_dev)
+    cl_m2l_cost = cl_cost_model.process_list2(actx, trav_dev, m2l_cost_dev)
 
     actx.queue.finish()
     logger.info("OpenCL time for process_list2: %gs",
             time.time() - start_time)
 
     start_time = time.time()
-    python_m2l_cost = python_cost_model.process_list2(actx.queue, trav, m2l_cost)
+    python_m2l_cost = python_cost_model.process_list2(actx, trav, m2l_cost)
     logger.info("Python time for process_list2: %gs",
             time.time() - start_time)
 
@@ -259,14 +262,14 @@ def test_compare_cl_and_py_cost_model(actx_factory, nsources, ntargets, dims, dt
     actx.queue.finish()
     start_time = time.time()
 
-    cl_m2p_cost = cl_cost_model.process_list3(actx.queue, trav_dev, m2p_cost_dev)
+    cl_m2p_cost = cl_cost_model.process_list3(actx, trav_dev, m2p_cost_dev)
 
     actx.queue.finish()
     logger.info("OpenCL time for process_list3: %gs",
             time.time() - start_time)
 
     start_time = time.time()
-    python_m2p_cost = python_cost_model.process_list3(actx.queue, trav, m2p_cost)
+    python_m2p_cost = python_cost_model.process_list3(actx, trav, m2p_cost)
     logger.info("Python time for process_list3: %gs",
             time.time() - start_time)
 
@@ -287,14 +290,14 @@ def test_compare_cl_and_py_cost_model(actx_factory, nsources, ntargets, dims, dt
     actx.queue.finish()
     start_time = time.time()
 
-    cl_p2l_cost = cl_cost_model.process_list4(actx.queue, trav_dev, p2l_cost_dev)
+    cl_p2l_cost = cl_cost_model.process_list4(actx, trav_dev, p2l_cost_dev)
 
     actx.queue.finish()
     logger.info("OpenCL time for process_list4: %gs",
             time.time() - start_time)
 
     start_time = time.time()
-    python_p2l_cost = python_cost_model.process_list4(actx.queue, trav, p2l_cost)
+    python_p2l_cost = python_cost_model.process_list4(actx, trav, p2l_cost)
     logger.info("Python time for process_list4: %gs",
             time.time() - start_time)
 
@@ -316,7 +319,7 @@ def test_compare_cl_and_py_cost_model(actx_factory, nsources, ntargets, dims, dt
     start_time = time.time()
 
     cl_refine_locals_cost = cl_cost_model.process_refine_locals(
-        actx.queue, trav_dev, l2l_cost_dev
+        actx, trav_dev, l2l_cost_dev
     )
 
     actx.queue.finish()
@@ -325,7 +328,7 @@ def test_compare_cl_and_py_cost_model(actx_factory, nsources, ntargets, dims, dt
 
     start_time = time.time()
     python_refine_locals_cost = python_cost_model.process_refine_locals(
-        actx.queue, trav, l2l_cost
+        actx, trav, l2l_cost
     )
     logger.info("Python time for refine_locals: %gs",
             time.time() - start_time)
@@ -348,7 +351,7 @@ def test_compare_cl_and_py_cost_model(actx_factory, nsources, ntargets, dims, dt
     start_time = time.time()
 
     cl_l2p_cost = cl_cost_model.process_eval_locals(
-            actx.queue, trav_dev, l2p_cost_dev)
+            actx, trav_dev, l2p_cost_dev)
 
     actx.queue.finish()
     logger.info("OpenCL time for process_eval_locals: %gs",
@@ -356,7 +359,7 @@ def test_compare_cl_and_py_cost_model(actx_factory, nsources, ntargets, dims, dt
 
     start_time = time.time()
     python_l2p_cost = python_cost_model.process_eval_locals(
-            actx.queue, trav, l2p_cost)
+            actx, trav, l2p_cost)
     logger.info("Python time for process_eval_locals: %gs",
             time.time() - start_time)
 
@@ -395,8 +398,8 @@ def test_estimate_calibration_params(actx_factory):
         # {{{ Generate sources, targets and target_radii
 
         from boxtree.tools import make_normal_particle_array as p_normal
-        sources = p_normal(actx.queue, nsources, dims, dtype, seed=15)
-        targets = p_normal(actx.queue, ntargets, dims, dtype, seed=18)
+        sources = p_normal(actx, nsources, dims, dtype, seed=15)
+        targets = p_normal(actx, ntargets, dims, dtype, seed=18)
 
         rng = np.random.default_rng(22)
         target_radii = rng.uniform(0.0, 0.05, (ntargets,)).astype(dtype)
@@ -406,16 +409,16 @@ def test_estimate_calibration_params(actx_factory):
         # {{{ Generate tree and traversal
 
         from boxtree import TreeBuilder
-        tb = TreeBuilder(actx.context)
+        tb = TreeBuilder(actx)
         tree, _ = tb(
-            actx.queue, sources, targets=targets, target_radii=target_radii,
+            actx, sources, targets=targets, target_radii=target_radii,
             stick_out_factor=0.15, max_particles_in_box=30, debug=True
         )
 
         from boxtree.traversal import FMMTraversalBuilder
-        tg = FMMTraversalBuilder(actx.context, well_sep_is_n_away=2)
-        trav_dev, _ = tg(actx.queue, tree, debug=True)
-        trav = trav_dev.get(queue=actx.queue)
+        tg = FMMTraversalBuilder(actx, well_sep_is_n_away=2)
+        trav_dev, _ = tg(actx, tree, debug=True)
+        trav = actx.to_numpy(trav_dev)
 
         traversals.append(trav)
         traversals_dev.append(trav_dev)
@@ -458,7 +461,7 @@ def test_estimate_calibration_params(actx_factory):
         level_to_order = level_to_orders[icase]
 
         python_model_results.append(python_cost_model.cost_per_stage(
-            actx.queue, traversal, level_to_order,
+            actx, traversal, level_to_order,
             _PythonFMMCostModel.get_unit_calibration_params(),
         ))
 
@@ -477,7 +480,7 @@ def test_estimate_calibration_params(actx_factory):
         level_to_order = level_to_orders[icase]
 
         cl_model_results.append(cl_cost_model.cost_per_stage(
-            actx.queue, traversal, level_to_order,
+            actx, traversal, level_to_order,
             FMMCostModel.get_unit_calibration_params(),
         ))
 
@@ -530,23 +533,23 @@ def test_cost_model_op_counts_agree_with_constantone_wrangler(
     actx = actx_factory()
 
     from boxtree.tools import make_normal_particle_array as p_normal
-    sources = p_normal(actx.queue, nsources, dims, dtype, seed=16)
-    targets = p_normal(actx.queue, ntargets, dims, dtype, seed=19)
+    sources = p_normal(actx, nsources, dims, dtype, seed=16)
+    targets = p_normal(actx, ntargets, dims, dtype, seed=19)
 
     rng = np.random.default_rng(20)
     target_radii = rng.uniform(0, 0.04, (ntargets,)).astype(dtype)
 
     from boxtree import TreeBuilder
-    tb = TreeBuilder(actx.context)
+    tb = TreeBuilder(actx)
     tree, _ = tb(
-        actx.queue, sources, targets=targets, target_radii=target_radii,
+        actx, sources, targets=targets, target_radii=target_radii,
         stick_out_factor=0.15, max_particles_in_box=30, debug=True
     )
 
     from boxtree.traversal import FMMTraversalBuilder
-    tg = FMMTraversalBuilder(actx.context, well_sep_is_n_away=2)
-    trav_dev, _ = tg(actx.queue, tree, debug=True)
-    trav = trav_dev.get(queue=actx.queue)
+    tg = FMMTraversalBuilder(actx, well_sep_is_n_away=2)
+    trav_dev, _ = tg(actx, tree, debug=True)
+    trav = actx.to_numpy(trav_dev)
 
     from boxtree.constant_one import (
             ConstantOneTreeIndependentDataForWrangler,
@@ -566,7 +569,7 @@ def test_cost_model_op_counts_agree_with_constantone_wrangler(
     level_to_order = np.array([1 for _ in range(tree.nlevels)])
 
     modeled_time = cost_model.cost_per_stage(
-        actx.queue, trav_dev, level_to_order,
+        actx, trav_dev, level_to_order,
         FMMCostModel.get_unit_calibration_params(),
     )
 
@@ -585,10 +588,10 @@ def test_cost_model_op_counts_agree_with_constantone_wrangler(
         total_cost += timing_data[stage]["ops_elapsed"]
 
     per_box_cost = cost_model.cost_per_box(
-        actx.queue, trav_dev, level_to_order,
+        actx, trav_dev, level_to_order,
         FMMCostModel.get_unit_calibration_params(),
     )
-    total_aggregate_cost = cost_model.aggregate_over_boxes(per_box_cost)
+    total_aggregate_cost = cost_model.aggregate_over_boxes(actx, per_box_cost)
 
     assert total_cost == (
             total_aggregate_cost

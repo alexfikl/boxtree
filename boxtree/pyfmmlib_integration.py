@@ -35,16 +35,18 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
-
-import logging
-logger = logging.getLogger(__name__)
 import enum
 
 import numpy as np
 
 from pytools import memoize_method, log_process
+
 from boxtree.timing import return_timing_data
 from boxtree.fmm import TreeIndependentDataForWrangler, ExpansionWranglerInterface
+from boxtree.array_context import PyOpenCLArrayContext
+
+import logging
+logger = logging.getLogger(__name__)
 
 
 # {{{ rotation data interface
@@ -77,8 +79,8 @@ class FMMLibRotationData(FMMLibRotationDataInterface):
     .. automethod:: __init__
     """
 
-    def __init__(self, queue, trav):
-        self.queue = queue
+    def __init__(self, array_context: PyOpenCLArrayContext, trav):
+        self._setup_actx = array_context
         self.trav = trav
         self.tree = trav.tree
 
@@ -86,27 +88,27 @@ class FMMLibRotationData(FMMLibRotationDataInterface):
     @memoize_method
     def rotation_classes_builder(self):
         from boxtree.rotation_classes import RotationClassesBuilder
-        return RotationClassesBuilder(self.queue.context)
+        return RotationClassesBuilder(self._setup_actx)
 
     @memoize_method
     def build_rotation_classes_lists(self):
-        trav = self.trav.to_device(self.queue)
-        tree = self.tree.to_device(self.queue)
-        return self.rotation_classes_builder(self.queue, trav, tree)[0]
+        trav = self._setup_actx.from_numpy(self.trav)
+        tree = self._setup_actx.from_numpy(self.tree)
+        return self.rotation_classes_builder(self._setup_actx, trav, tree)[0]
 
     @memoize_method
     def m2l_rotation_lists(self):
-        return (self
-                .build_rotation_classes_lists()
-                .from_sep_siblings_rotation_classes
-                .get(self.queue))
+        return self._setup_actx.to_numpy(
+            self.build_rotation_classes_lists()
+                .from_sep_siblings_rotation_classes,
+            )
 
     @memoize_method
     def m2l_rotation_angles(self):
-        return (self
-                .build_rotation_classes_lists()
-                .from_sep_siblings_rotation_class_to_angle
-                .get(self.queue))
+        return self._setup_actx.to_numpy(
+            self.build_rotation_classes_lists()
+                .from_sep_siblings_rotation_class_to_angle,
+            )
 
 
 class FMMLibRotationDataNotSuppliedWarning(UserWarning):

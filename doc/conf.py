@@ -18,5 +18,6 @@ intersphinx_mapping = {
         "https://docs.python.org/3/": None,
         "https://numpy.org/doc/stable/": None,
         "https://documen.tician.de/pyopencl/": None,
+        "https://documen.tician.de/arraycontext/": None,
         "https://documen.tician.de/pytential/": None,
         }

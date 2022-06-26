@@ -88,7 +88,7 @@ Construct Local Tree and Traversal
 Distributed Wrangler
 --------------------
 
-.. autoclass:: boxtree.distributed.calculation.DistributedExpansionWrangler
+.. autoclass:: boxtree.distributed.calculation.DistributedExpansionWranglerMixin
 
 .. _distributed-fmm-evaluation:
 
@@ -97,23 +97,27 @@ Distributed FMM Evaluation
 
 The distributed version of the FMM evaluation shares the same interface as the
 shared-memory version. To evaluate FMM in a distributed manner, use a subclass
-of :class:`boxtree.distributed.calculation.DistributedExpansionWrangler` in
-:func:`boxtree.fmm.drive_fmm`.
+of :class:`boxtree.distributed.calculation.DistributedExpansionWranglerMixin`
+in :func:`boxtree.fmm.drive_fmm`.
 
 """
 
-from mpi4py import MPI
-import numpy as np
-import pyopencl as cl
-import pyopencl.array
-from enum import IntEnum
+import enum
 import warnings
+
+import numpy as np
+from mpi4py import MPI
+
 from boxtree.cost import FMMCostModel
+from boxtree.array_context import PyOpenCLArrayContext
 
 __all__ = ["DistributedFMMRunner"]
 
 
-class MPITags(IntEnum):
+# {{{ MPI
+
+@enum.unique
+class MPITags(enum.IntEnum):
     DIST_WEIGHT = 1
     GATHER_POTENTIALS = 2
     REDUCE_POTENTIALS = 3
@@ -121,27 +125,36 @@ class MPITags(IntEnum):
 
 
 def dtype_to_mpi(dtype):
-    """ This function translates a numpy datatype into the corresponding type used in
+    """This function translates a numpy datatype into the corresponding type used in
     mpi4py.
     """
+
     if hasattr(MPI, "_typedict"):
-        mpi_type = MPI._typedict[np.dtype(dtype).char]
+        typedict = MPI._typedict
     elif hasattr(MPI, "__TypeDict__"):
-        mpi_type = MPI.__TypeDict__[np.dtype(dtype).char]
+        typedict = MPI.__TypeDict__
     else:
-        raise RuntimeError("There is no dictionary to translate from Numpy dtype to "
-                           "MPI type")
+        raise RuntimeError(
+            "There is no dictionary to translate from np.dtype to an MPI datatype")
+
+    mpi_type = typedict.get(np.dtype(dtype).char, None)
+    if mpi_type is None:
+        raise ValueError(f"Could not convert '{dtype}' to an MPI datatype")
+
     return mpi_type
 
+# }}}
+
+
+# {{{ DistributedFMMRunner
 
 def construct_distributed_wrangler(
-        queue, global_tree, traversal_builder, wrangler_factory,
+        actx: PyOpenCLArrayContext, global_tree, traversal_builder, wrangler_factory,
         calibration_params, comm):
     """Helper function for constructing the distributed wrangler on each rank.
 
     Note: This function needs to be called collectively on all ranks.
     """
-
     mpi_rank = comm.Get_rank()
 
     # `tree_in_device_memory` is True if the global tree is in the device memory
@@ -152,7 +165,7 @@ def construct_distributed_wrangler(
     # worker ranks.
     tree_in_device_memory = None
     if mpi_rank == 0:
-        tree_in_device_memory = isinstance(global_tree.targets[0], cl.array.Array)
+        tree_in_device_memory = isinstance(global_tree.targets[0], actx.array_types)
     tree_in_device_memory = comm.bcast(tree_in_device_memory, root=0)
 
     # {{{ Broadcast the global tree
@@ -160,7 +173,7 @@ def construct_distributed_wrangler(
     global_tree_host = None
     if mpi_rank == 0:
         if tree_in_device_memory:
-            global_tree_host = global_tree.get(queue)
+            global_tree_host = actx.to_numpy(global_tree)
         else:
             global_tree_host = global_tree
 
@@ -170,11 +183,11 @@ def construct_distributed_wrangler(
     if mpi_rank == 0 and tree_in_device_memory:
         global_tree_dev = global_tree
     else:
-        global_tree_dev = global_tree_host.to_device(queue)
-    global_tree_dev = global_tree_dev.with_queue(queue)
+        global_tree_dev = actx.from_numpy(global_tree_host)
+    global_tree_dev = actx.thaw(global_tree_dev)
 
-    global_trav_dev, _ = traversal_builder(queue, global_tree_dev)
-    global_trav_host = global_trav_dev.get(queue)
+    global_trav_dev, _ = traversal_builder(actx, global_tree_dev)
+    global_trav_host = actx.to_numpy(global_trav_dev)
 
     if tree_in_device_memory:
         global_trav = global_trav_dev
@@ -196,16 +209,16 @@ def construct_distributed_wrangler(
             # accurate one
             warnings.warn("Calibration parameters for the cost model are not "
                         "supplied. The default one will be used.")
-            calibration_params = \
-                FMMCostModel.get_unit_calibration_params()
+            calibration_params = FMMCostModel.get_unit_calibration_params()
 
         # We need to construct a wrangler in order to access `level_orders`
         global_wrangler = wrangler_factory(global_trav, global_trav)
 
         cost_per_box = cost_model.cost_per_box(
-            queue, global_trav_dev, global_wrangler.level_orders,
+            actx, global_trav_dev, global_wrangler.level_orders,
             calibration_params
-        ).get()
+        )
+        cost_per_box = actx.to_numpy(cost_per_box)
 
     from boxtree.distributed.partition import partition_work
     responsible_boxes_list = partition_work(cost_per_box, global_trav_host, comm)
@@ -216,7 +229,7 @@ def construct_distributed_wrangler(
 
     from boxtree.distributed.local_tree import generate_local_tree
     local_tree, src_idx, tgt_idx = generate_local_tree(
-        queue, global_trav_host, responsible_boxes_list, comm)
+        actx, global_trav_dev, actx.from_numpy(responsible_boxes_list), comm)
 
     # }}}
 
@@ -230,12 +243,12 @@ def construct_distributed_wrangler(
     # {{{ Compute traversal object on each rank
 
     from boxtree.distributed.local_traversal import generate_local_travs
-    local_trav_dev = generate_local_travs(queue, local_tree, traversal_builder)
+    local_trav_dev = generate_local_travs(actx, local_tree, traversal_builder)
 
     if not tree_in_device_memory:
-        local_trav = local_trav_dev.get(queue=queue)
+        local_trav = actx.to_numpy(local_trav_dev)
     else:
-        local_trav = local_trav_dev.with_queue(None)
+        local_trav = actx.freeze(local_trav_dev)
 
     # }}}
 
@@ -250,7 +263,7 @@ class DistributedFMMRunner:
     .. automethod:: __init__
     .. automethod:: drive_dfmm
     """
-    def __init__(self, queue, global_tree,
+    def __init__(self, array_context: PyOpenCLArrayContext, global_tree,
                  traversal_builder,
                  wrangler_factory,
                  calibration_params=None, comm=MPI.COMM_WORLD):
@@ -273,7 +286,7 @@ class DistributedFMMRunner:
         """
         self.wrangler, self.src_idx_all_ranks, self.tgt_idx_all_ranks = \
             construct_distributed_wrangler(
-                queue, global_tree, traversal_builder, wrangler_factory,
+                array_context, global_tree, traversal_builder, wrangler_factory,
                 calibration_params, comm)
 
     def drive_dfmm(self, source_weights, timing_data=None):
@@ -285,3 +298,7 @@ class DistributedFMMRunner:
             timing_data=timing_data,
             global_src_idx_all_ranks=self.src_idx_all_ranks,
             global_tgt_idx_all_ranks=self.tgt_idx_all_ranks)
+
+# }}}
+
+# vim: fdm=marker

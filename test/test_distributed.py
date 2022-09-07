@@ -114,7 +114,7 @@ def _test_against_shared(
 
             # Compute FMM with one MPI rank
             from boxtree.fmm import drive_fmm
-            pot_fmm = drive_fmm(wrangler, [sources_weights]) * 2 * np.pi
+            pot_fmm = drive_fmm(actx, wrangler, [sources_weights]) * 2 * np.pi
 
         # Compute FMM using the distributed implementation
 
@@ -133,7 +133,7 @@ def _test_against_shared(
 
         timing_data = {}
         pot_dfmm = distribued_fmm_info.drive_dfmm(
-                    [sources_weights], timing_data=timing_data)
+            actx, [sources_weights], timing_data=timing_data)
         assert timing_data
 
     # Uncomment the following section to print the time taken of each stage
@@ -265,7 +265,7 @@ def _test_constantone(tmp_cache_basedir, dims, nsources, ntargets, dtype):
         distributed_fmm_info = DistributedFMMRunner(
             actx, tree, tg, wrangler_factory, comm=MPI.COMM_WORLD)
 
-        pot_dfmm = distributed_fmm_info.drive_dfmm([sources_weights])
+        pot_dfmm = distributed_fmm_info.drive_dfmm(actx, [sources_weights])
 
     if rank == 0:
         assert (np.all(pot_dfmm == nsources))

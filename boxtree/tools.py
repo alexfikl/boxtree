@@ -37,9 +37,6 @@ from pytools.obj_array import make_obj_array
 
 from boxtree.array_context import PyOpenCLArrayContext
 
-import loopy as lp
-from loopy.version import LOOPY_USE_LANGUAGE_VERSION_2018_2  # noqa: F401
-
 
 # Use offsets in VectorArg by default.
 VectorArg = partial(_VectorArg, with_offset=True)
@@ -105,155 +102,155 @@ def make_normal_particle_array(actx, nparticles, dims, dtype, seed=15):
 
 
 def make_surface_particle_array(actx, nparticles, dims, dtype, seed=15):
+    import loopy as lp
+    from boxtree.array_context import make_loopy_program
+
+    @memoize_in(actx, (make_surface_particle_array, dims, dtype))
+    def get_2d_kernel():
+        knl = make_loopy_program(
+            "{[i]: 0 <= i < n}",
+            """
+            for i
+                <> phi = 2*M_PI / n * i
+                x0[i] = 0.5 * (3*cos(phi) + 2*sin(3*phi))
+                x1[i] = 0.5 * (1*sin(phi) + 1.5*sin(2*phi))
+            end
+            """,
+            kernel_data=[
+                lp.GlobalArg("x0,x1", dtype, shape=lp.auto),
+                lp.ValueArg("n", np.int32),
+            ],
+            name="make_surface_array_2d",
+            assumptions="n>0")
+
+        knl = lp.split_iname(knl, "i", 128, outer_tag="g.0", inner_tag="l.0")
+        return knl
+
+    @memoize_in(actx, (make_surface_particle_array, dims, dtype))
+    def get_3d_kernel():
+        knl = make_loopy_program(
+            "{[i, j]: 0 <= i, j <n}",
+            """
+            for i, j
+                <> phi = 2 * M_PI / n * i
+                <> theta = 2 * M_PI / n * j
+                x0[i, j] = 5 * cos(phi) * (3 + cos(theta))
+                x1[i, j] = 5 * sin(phi) * (3 + cos(theta))
+                x2[i, j] = 5 * sin(theta)
+            end
+            """,
+            kernel_data=[
+                lp.GlobalArg("x0,x1,x2", dtype, shape=lp.auto),
+                lp.ValueArg("n", np.int32),
+            ],
+            name="make_surface_array_3d",
+            assumptions="n>0")
+
+        knl = lp.split_iname(knl, "i", 16, outer_tag="g.1", inner_tag="l.1")
+        knl = lp.split_iname(knl, "j", 16, outer_tag="g.0", inner_tag="l.0")
+
+        return knl
+
     if dims == 2:
-        def get_2d_knl(dtype):
-            knl = lp.make_kernel(
-                "{[i]: 0<=i<n}",
-                """
-                    for i
-                        <> phi = 2*M_PI/n * i
-                        x[i] = 0.5* (3*cos(phi) + 2*sin(3*phi))
-                        y[i] = 0.5* (1*sin(phi) + 1.5*sin(2*phi))
-                    end
-                    """,
-                [
-                    lp.GlobalArg("x,y", dtype, shape=lp.auto),
-                    lp.ValueArg("n", np.int32),
-                    ],
-                name="make_surface_dist")
-
-            knl = lp.split_iname(knl, "i", 128, outer_tag="g.0", inner_tag="l.0")
-
-            return knl
-
-        evt, result = get_2d_knl(dtype)(actx.queue, n=nparticles)
-
-        result = [x.ravel() for x in result]
-
-        return make_obj_array(result)
+        n = nparticles
+        knl = get_2d_kernel()
     elif dims == 3:
         n = int(nparticles**0.5)
-
-        def get_3d_knl(dtype):
-            knl = lp.make_kernel(
-                "{[i,j]: 0<=i,j<n}",
-                """
-                    for i,j
-                        <> phi = 2*M_PI/n * i
-                        <> theta = 2*M_PI/n * j
-                        x[i,j] = 5*cos(phi) * (3 + cos(theta))
-                        y[i,j] = 5*sin(phi) * (3 + cos(theta))
-                        z[i,j] = 5*sin(theta)
-                    end
-                    """,
-                [
-                    lp.GlobalArg("x,y,z,", dtype, shape=lp.auto),
-                    lp.ValueArg("n", np.int32),
-                    ])
-
-            knl = lp.split_iname(knl, "i", 16, outer_tag="g.1", inner_tag="l.1")
-            knl = lp.split_iname(knl, "j", 16, outer_tag="g.0", inner_tag="l.0")
-
-            return knl
-
-        evt, result = get_3d_knl(dtype)(actx.queue, n=n)
-
-        result = [x.ravel() for x in result]
-
-        return make_obj_array(result)
+        knl = get_3d_kernel()
     else:
-        raise NotImplementedError
+        raise ValueError(f"unsupported dimensions: {dims}")
+
+    assert n > 0
+    result = actx.call_loopy(knl, n=n)
+    return make_obj_array([result[f"x{i}"].ravel() for i in range(dims)])
 
 
 def make_uniform_particle_array(actx, nparticles, dims, dtype, seed=15):
+    import loopy as lp
+    from boxtree.array_context import make_loopy_program
+
+    @memoize_in(actx, (make_uniform_particle_array, dims, dtype))
+    def get_2d_kernel():
+        knl = make_loopy_program(
+            "{[i, j]: 0 <= i, j < n}",
+            """
+            for i, j
+                <> xx = 4 * i / (n - 1)
+                <> yy = 4 * j / (n - 1)
+                <float64> angle = 0.3
+                <> s = sin(angle)
+                <> c = cos(angle)
+                x0[i, j] = c * xx + s * yy - 2
+                x1[i, j] = -s * xx + c * yy - 2
+            end
+            """,
+            kernel_data=[
+                lp.GlobalArg("x0,x1", dtype, shape=lp.auto),
+                lp.ValueArg("n", np.int32),
+            ],
+            name="make_uniform_array_2d",
+            assumptions="n>0")
+
+        knl = lp.split_iname(knl, "i", 16, outer_tag="g.1", inner_tag="l.1")
+        knl = lp.split_iname(knl, "j", 16, outer_tag="g.0", inner_tag="l.0")
+
+        return knl
+
+    @memoize_in(actx, (make_uniform_particle_array, dims, dtype))
+    def get_3d_kernel():
+        knl = make_loopy_program(
+            "{[i, j, k]: 0 <= i, j, k < n}",
+            """
+            for i, j, k
+                <> xx = i / (n - 1)
+                <> yy = j / (n - 1)
+                <> zz = k / (n - 1)
+
+                <float64> phi = 0.3
+                <> s1 = sin(phi)
+                <> c1 = cos(phi)
+
+                <> xxx = c1 * xx + s1 * yy
+                <> yyy = -s1 * xx + c1 * yy
+                <> zzz = zz
+
+                <float64> theta = 0.7
+                <> s2 = sin(theta)
+                <> c2 = cos(theta)
+
+                x0[i, j, k] = 4 * (c2 * xxx + s2 * zzz) - 2
+                x1[i, j, k] = 4 * yyy - 2
+                x2[i, j, k] = 4 * (-s2 * xxx + c2 * zzz) - 2
+            end
+            """,
+            kernel_data=[
+                lp.GlobalArg("x0,x1,x2", dtype, shape=lp.auto),
+                lp.ValueArg("n", np.int32),
+            ],
+            name="make_uniform_array_3d",
+            assumptions="n>0")
+
+        knl = lp.split_iname(knl, "j", 16, outer_tag="g.1", inner_tag="l.1")
+        knl = lp.split_iname(knl, "k", 16, outer_tag="g.0", inner_tag="l.0")
+
+        return knl
+
     if dims == 2:
         n = int(nparticles**0.5)
-
-        def get_2d_knl(dtype):
-            knl = lp.make_kernel(
-                "{[i,j]: 0<=i,j<n}",
-                """
-                    for i,j
-                        <> xx = 4*i/(n-1)
-                        <> yy = 4*j/(n-1)
-                        <float64> angle = 0.3
-                        <> s = sin(angle)
-                        <> c = cos(angle)
-                        x[i,j] = c*xx + s*yy - 2
-                        y[i,j] = -s*xx + c*yy - 2
-                    end
-                    """,
-                [
-                    lp.GlobalArg("x,y", dtype, shape=lp.auto),
-                    lp.ValueArg("n", np.int32),
-                    ], assumptions="n>0")
-
-            knl = lp.split_iname(knl, "i", 16, outer_tag="g.1", inner_tag="l.1")
-            knl = lp.split_iname(knl, "j", 16, outer_tag="g.0", inner_tag="l.0")
-
-            return knl
-
-        evt, result = get_2d_knl(dtype)(actx.queue, n=n)
-
-        result = [x.ravel() for x in result]
-
-        return make_obj_array(result)
+        knl = get_2d_kernel()
     elif dims == 3:
         n = int(nparticles**(1/3))
-
-        def get_3d_knl(dtype):
-            knl = lp.make_kernel(
-                "{[i,j,k]: 0<=i,j,k<n}",
-                """
-                    for i,j,k
-                        <> xx = i/(n-1)
-                        <> yy = j/(n-1)
-                        <> zz = k/(n-1)
-
-                        <float64> phi = 0.3
-                        <> s1 = sin(phi)
-                        <> c1 = cos(phi)
-
-                        <> xxx = c1*xx + s1*yy
-                        <> yyy = -s1*xx + c1*yy
-                        <> zzz = zz
-
-                        <float64> theta = 0.7
-                        <> s2 = sin(theta)
-                        <> c2 = cos(theta)
-
-                        x[i,j,k] = 4 * (c2*xxx + s2*zzz) - 2
-                        y[i,j,k] = 4 * yyy - 2
-                        z[i,j,k] = 4 * (-s2*xxx + c2*zzz) - 2
-                    end
-                    """,
-                [
-                    lp.GlobalArg("x,y,z", dtype, shape=lp.auto),
-                    lp.ValueArg("n", np.int32),
-                    ], assumptions="n>0")
-
-            knl = lp.split_iname(knl, "j", 16, outer_tag="g.1", inner_tag="l.1")
-            knl = lp.split_iname(knl, "k", 16, outer_tag="g.0", inner_tag="l.0")
-
-            return knl
-
-        evt, result = get_3d_knl(dtype)(actx.queue, n=n)
-
-        result = [x.ravel() for x in result]
-
-        return make_obj_array(result)
+        knl = get_3d_kernel()
     else:
-        raise NotImplementedError
+        raise ValueError(f"unsupported dimensions: {dims}")
 
+    assert n > 0
 
-def make_rotated_uniform_particle_array(actx, nparticles, dims, dtype, seed=15):
-    raise NotImplementedError
+    result = actx.call_loopy(knl, n=n)
+    return make_obj_array([result[f"x{i}"].ravel() for i in range(dims)])
+
 
 # }}}
-
-
-def particle_array_to_host(actx, particles):
-    return np.array([actx.to_numpy(x) for x in particles], order="F").T
 
 
 # {{{ host/device data storage
@@ -374,7 +371,7 @@ class DeviceDataRecord(Record):
 # {{{ type mangling
 
 def get_type_moniker(dtype):
-    return "%s%d" % (dtype.kind, dtype.itemsize)
+    return f"{dtype.kind}{dtype.itemsize}"
 
 # }}}
 

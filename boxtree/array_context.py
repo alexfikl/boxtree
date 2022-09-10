@@ -20,9 +20,12 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
+from typing import Any, List, Optional, Union
+
 import numpy as np
 
 from pyopencl.algorithm import BuiltList
+from pytools.tag import ToTagSetConvertible
 
 from arraycontext import (          # noqa: F401
         PyOpenCLArrayContext as PyOpenCLArrayContextBase,
@@ -35,6 +38,37 @@ from arraycontext.pytest import (
 __doc__ = """
 .. autoclass:: PyOpenCLArrayContext
 """
+
+
+# {{{ make_loopy_program
+
+def make_loopy_program(
+        domains, statements,
+        kernel_data: Optional[List[Any]] = None, *,
+        name: str = "sumpy_loopy_kernel",
+        assumptions: Optional[Union[List[str], str]] = None,
+        tags: ToTagSetConvertible = None):
+    """Return a :class:`loopy.LoopKernel` suitable for use with
+    :meth:`arraycontext.ArrayContext.call_loopy`.
+    """
+    if kernel_data is None:
+        kernel_data = [...]
+
+    import loopy as lp
+    from arraycontext.loopy import _DEFAULT_LOOPY_OPTIONS
+
+    return lp.make_kernel(
+            domains,
+            statements,
+            kernel_data=kernel_data,
+            options=_DEFAULT_LOOPY_OPTIONS,
+            default_offset=lp.auto,
+            name=name,
+            lang_version=lp.MOST_RECENT_LANGUAGE_VERSION,
+            assumptions=assumptions,
+            tags=tags)
+
+# }}}
 
 
 # {{{ array context
@@ -50,7 +84,7 @@ class PyOpenCLArrayContext(PyOpenCLArrayContextBase):
                     "Did you use arraycontext.make_loopy_program "
                     "to create this kernel?")
 
-        return super().transform_loopy_program(t_unit)
+        return t_unit
 
     # NOTE: _rec_map_container is copied from arraycontext wholesale and should
     # be kept in sync as much as possible!

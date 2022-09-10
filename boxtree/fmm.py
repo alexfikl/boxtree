@@ -550,7 +550,6 @@ def drive_fmm(actx: PyOpenCLArrayContext,
             potentials, global_tgt_idx_all_ranks)
 
     result = wrangler.reorder_potentials(potentials)
-
     result = wrangler.finalize_potentials(actx, result)
 
     fmm_proc.done()

@@ -29,11 +29,7 @@ from arraycontext import pytest_generate_tests_for_array_contexts
 from boxtree.array_context import (                                 # noqa: F401
         PytestPyOpenCLArrayContextFactory, _acf)
 
-from boxtree.tools import (  # noqa: F401
-        make_normal_particle_array as p_normal,
-        make_surface_particle_array as p_surface,
-        make_uniform_particle_array as p_uniform,
-        particle_array_to_host)
+from boxtree.tools import make_normal_particle_array as p_normal
 from boxtree.constant_one import (
         ConstantOneTreeIndependentDataForWrangler,
         ConstantOneExpansionWrangler)

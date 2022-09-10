@@ -609,82 +609,70 @@ void generate(LIST_ARG_DECL USER_ARG_DECL index_type i)
 """
 
 
-class MaskCompressorKernel:
+def mask_to_csr(actx: PyOpenCLArrayContext, mask, list_dtype=None):
+    """Convert a mask to a list in :ref:`csr` format.
+
+    :arg mask: Either a 1D or 2D array.
+        * If *mask* is 1D, it should represent a masked list, where
+            *mask[i]* is true if and only if *i* is in the list.
+        * If *mask* is 2D, it should represent a list of masked lists,
+            so that *mask[i,j]* is true if and only if *j* is in list *i*.
+
+    :arg list_dtype: The dtype for the output list(s). Defaults to the mask
+        dtype.
+
+    :returns: The return value depends on the type of the input.
+        * If mask* is 1D, returns a tuple *(list, evt)*.
+        * If *mask* is 2D, returns a tuple *(starts, lists, event)*, as a
+            :ref:`csr` list.
     """
-    .. automethod:: __call__
-    """
-    def __init__(self, array_context: PyOpenCLArrayContext):
-        self._setup_actx = array_context
+    from pyopencl.algorithm import ListOfListsBuilder
 
-    @property
-    def context(self):
-        return self._setup_actx.context
+    if list_dtype is None:
+        list_dtype = mask.dtype
 
-    @memoize_method
-    def get_list_compressor_kernel(self, mask_dtype, list_dtype):
-        from pyopencl.algorithm import ListOfListsBuilder
-
+    @memoize_in(actx, (mask_to_csr, mask.dtype, list_dtype))
+    def get_list_compressor_kernel():
         return ListOfListsBuilder(
-                self.context,
+                actx.context,
                 [("output", list_dtype)],
                 MASK_LIST_COMPRESSOR_BODY,
                 [
-                    _VectorArg(mask_dtype, "mask"),
+                    _VectorArg(mask.dtype, "mask"),
                 ],
                 name_prefix="compress_list")
 
-    @memoize_method
-    def get_matrix_compressor_kernel(self, mask_dtype, list_dtype):
-        from pyopencl.algorithm import ListOfListsBuilder
-
+    @memoize_in(actx, (mask_to_csr, mask.dtype, list_dtype))
+    def get_matrix_compressor_kernel():
         return ListOfListsBuilder(
-                self.context,
+                actx.context,
                 [("output", list_dtype)],
                 MASK_MATRIX_COMPRESSOR_BODY,
                 [
                     ScalarArg(np.int32, "ncols"),
                     ScalarArg(np.int32, "outer_stride"),
                     ScalarArg(np.int32, "inner_stride"),
-                    _VectorArg(mask_dtype, "mask"),
+                    _VectorArg(mask.dtype, "mask"),
                 ],
                 name_prefix="compress_matrix")
 
-    def __call__(self, actx, mask, list_dtype=None):
-        """Convert a mask to a list in :ref:`csr` format.
+    if len(mask.shape) == 1:
+        knl = get_list_compressor_kernel()
+        result, evt = knl(actx.queue, mask.shape[0], mask.data)
+        return result["output"].lists, evt
+    elif len(mask.shape) == 2:
+        # FIXME: This is efficient for small column sizes but may not be
+        # for larger ones since the work is partitioned by row.
+        knl = get_matrix_compressor_kernel()
+        size = mask.dtype.itemsize
+        assert size > 0
 
-        :arg mask: Either a 1D or 2D array.
-            * If *mask* is 1D, it should represent a masked list, where
-              *mask[i]* is true if and only if *i* is in the list.
-            * If *mask* is 2D, it should represent a list of masked lists,
-              so that *mask[i,j]* is true if and only if *j* is in list *i*.
-
-        :arg list_dtype: The dtype for the output list(s). Defaults to the mask
-            dtype.
-
-        :returns: The return value depends on the type of the input.
-            * If mask* is 1D, returns a tuple *(list, evt)*.
-            * If *mask* is 2D, returns a tuple *(starts, lists, event)*, as a
-              :ref:`csr` list.
-        """
-        if list_dtype is None:
-            list_dtype = mask.dtype
-
-        if len(mask.shape) == 1:
-            knl = self.get_list_compressor_kernel(mask.dtype, list_dtype)
-            result, evt = knl(actx.queue, mask.shape[0], mask.data)
-            return (result["output"].lists, evt)
-        elif len(mask.shape) == 2:
-            # FIXME: This is efficient for small column sizes but may not be
-            # for larger ones since the work is partitioned by row.
-            knl = self.get_matrix_compressor_kernel(mask.dtype, list_dtype)
-            size = mask.dtype.itemsize
-            assert size > 0
-            result, evt = knl(actx.queue, mask.shape[0], mask.shape[1],
-                              mask.strides[0] // size, mask.strides[1] // size,
-                              mask.data)
-            return (result["output"].starts, result["output"].lists, evt)
-        else:
-            raise ValueError("unsupported dimensionality")
+        result, evt = knl(actx.queue, mask.shape[0], mask.shape[1],
+                            mask.strides[0] // size, mask.strides[1] // size,
+                            mask.data)
+        return result["output"].starts, result["output"].lists, evt
+    else:
+        raise ValueError("unsupported dimensionality")
 
 # }}}
 

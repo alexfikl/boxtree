@@ -147,11 +147,6 @@ class LocalTreeGeneratorCodeContainer:
         )
 
     @memoize_method
-    def mask_compressor_kernel(self):
-        from boxtree.tools import MaskCompressorKernel
-        return MaskCompressorKernel(self._setup_actx)
-
-    @memoize_method
     def modify_target_flags_kernel(self):
         from boxtree import box_flags_enum
         box_flag_t = dtype_to_ctype(box_flags_enum.dtype)
@@ -388,8 +383,9 @@ def generate_local_tree(
         multipole_src_boxes_all_ranks = actx.from_numpy(
             multipole_src_boxes_all_ranks)
 
+        from boxtree.tools import mask_to_csr
         (box_to_user_rank_starts, box_to_user_rank_lists, evt) = \
-            code.mask_compressor_kernel()(
+            mask_to_csr(
                 actx, multipole_src_boxes_all_ranks.transpose(),
                 list_dtype=np.int32)
 

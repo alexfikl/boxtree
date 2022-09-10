@@ -95,8 +95,7 @@ def test_allreduce_comm_pattern(p):
 def test_masked_matrix_compression(actx_factory, order):
     actx = actx_factory()
 
-    from boxtree.tools import MaskCompressorKernel
-    matcompr = MaskCompressorKernel(actx)
+    from boxtree.tools import mask_to_csr
 
     n = 40
     m = 10
@@ -105,7 +104,7 @@ def test_masked_matrix_compression(actx_factory, order):
     arr = (rng.random((n, m)) > 0.5).astype(np.int8).copy(order=order)
     d_arr = actx.from_numpy(arr)
 
-    arr_starts, arr_lists, evt = matcompr(actx, d_arr)
+    arr_starts, arr_lists, evt = mask_to_csr(actx, d_arr)
     arr_starts = actx.to_numpy(arr_starts)
     arr_lists = actx.to_numpy(arr_lists)
 
@@ -121,8 +120,7 @@ def test_masked_matrix_compression(actx_factory, order):
 def test_masked_list_compression(actx_factory):
     actx = actx_factory()
 
-    from boxtree.tools import MaskCompressorKernel
-    listcompr = MaskCompressorKernel(actx)
+    from boxtree.tools import mask_to_csr
 
     n = 20
 
@@ -131,7 +129,7 @@ def test_masked_list_compression(actx_factory):
     arr = (np.random.rand(n) > 0.5).astype(np.int8)
     d_arr = actx.from_numpy(arr)
 
-    arr_list, evt = listcompr(actx, d_arr)
+    arr_list, evt = mask_to_csr(actx, d_arr)
     arr_list = actx.to_numpy(arr_list)
 
     assert set(arr_list) == set(arr.nonzero()[0])

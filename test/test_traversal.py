@@ -342,17 +342,14 @@ def test_from_sep_siblings_translation_and_rotation_classes(
     # {{{ build traversal
 
     from boxtree.traversal import FMMTraversalBuilder
-    from boxtree.rotation_classes import RotationClassesBuilder
-    from boxtree.translation_classes import TranslationClassesBuilder
+    from boxtree.rotation_classes import build_rotation_classes
+    from boxtree.translation_classes import build_translation_classes
 
     tg = FMMTraversalBuilder(actx, well_sep_is_n_away=well_sep_is_n_away)
     trav, _ = tg(actx, tree)
 
-    rb = RotationClassesBuilder(actx)
-    result, _ = rb(actx, trav, tree)
-
-    tb = TranslationClassesBuilder(actx)
-    result_tb, _ = tb(actx, trav, tree)
+    result = build_rotation_classes(actx, trav, tree)
+    result_tb = build_translation_classes(actx, trav, tree)
 
     rot_classes = actx.to_numpy(
             result.from_sep_siblings_rotation_classes)

@@ -84,17 +84,12 @@ class FMMLibRotationData(FMMLibRotationDataInterface):
         self.trav = trav
         self.tree = trav.tree
 
-    @property
-    @memoize_method
-    def rotation_classes_builder(self):
-        from boxtree.rotation_classes import RotationClassesBuilder
-        return RotationClassesBuilder(self._setup_actx)
-
     @memoize_method
     def build_rotation_classes_lists(self):
-        trav = self._setup_actx.from_numpy(self.trav)
-        tree = self._setup_actx.from_numpy(self.tree)
-        return self.rotation_classes_builder(self._setup_actx, trav, tree)[0]
+        from boxtree.rotation_classes import build_rotation_classes
+        actx = self._setup_actx
+        return build_rotation_classes(
+            actx, actx.from_numpy(self.trav), actx.from_numpy(self.tree))
 
     @memoize_method
     def m2l_rotation_lists(self):

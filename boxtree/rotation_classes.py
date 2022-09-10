@@ -161,9 +161,9 @@ def build_rotation_classes(
         actx: PyOpenCLArrayContext,
         trav: FMMTraversalInfo, tree: Tree) -> RotationClassesInfo:
     """Build rotation classes for List 2 translations."""
-    from boxtree.translation_classes import compute_used_tranlation_classes
+    from boxtree.translation_classes import compute_used_translation_classes
     translation_class_is_used, translation_classes_lists = (
-        compute_used_tranlation_classes(actx, trav, tree,
+        compute_used_translation_classes(actx, trav, tree,
             is_translation_per_level=False))
 
     d = tree.dimensions
@@ -176,7 +176,7 @@ def build_rotation_classes(
 
     translation_class_to_rotation_class, rotation_angles = (
         translation_classes_to_rotation_classes_and_angles(
-            n, d, used_translation_classes))
+            used_translation_classes, n, d))
 
     # There should be no more than 2^(d-1) * (2n+1)^d distinct rotation
     # classes, since that is an upper bound on the number of distinct

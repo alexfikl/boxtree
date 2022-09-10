@@ -266,7 +266,7 @@ def translation_class_to_normalized_vector(
     return result
 
 
-def compute_used_tranlation_classes(
+def compute_used_translation_classes(
         actx: PyOpenCLArrayContext, trav: FMMTraversalInfo, tree: Tree, *,
         is_translation_per_level: bool):
     # {{{ compute translation classes for list 2
@@ -282,7 +282,7 @@ def compute_used_tranlation_classes(
         ntranslation_classes = ntranslation_classes * tree.nlevels
 
     @memoize_in(actx, (
-        compute_used_tranlation_classes,
+        compute_used_translation_classes,
         dimensions, well_sep_is_n_away, tree.box_id_dtype,
         tree.box_level_dtype, coord_dtype, is_translation_per_level))
     def get_translation_class_finder_knl():
@@ -312,7 +312,7 @@ def compute_used_tranlation_classes(
             var_values=(
                 ("dimensions", dimensions),
                 ("ntranslation_classes_per_level", num_translation_classes),
-                ("translation_class_per_level", ntranslation_classes),
+                ("translation_class_per_level", is_translation_per_level),
                 ("cvec_sub", partial(
                     coord_vec_subscript_code, dimensions)),
             ),
@@ -342,7 +342,7 @@ def compute_used_tranlation_classes(
     translation_classes_lists.add_event(evt)
     translation_class_is_used.add_event(evt)
 
-    if actx.to_numpy(error_flag)[0]:
+    if actx.to_numpy(error_flag):
         raise ValueError("could not compute translation classes")
 
     return translation_class_is_used, translation_classes_lists
@@ -356,7 +356,7 @@ def build_translation_classes(actx: PyOpenCLArrayContext,
         is_translation_per_level: bool = True) -> TranslationClassesInfo:
     """Build translation classes for List 2 translations."""
     translation_class_is_used, translation_classes_lists = (
-        compute_used_tranlation_classes(actx, trav, tree,
+        compute_used_translation_classes(actx, trav, tree,
             is_translation_per_level=is_translation_per_level))
 
     well_sep_is_n_away = trav.well_sep_is_n_away
@@ -374,8 +374,9 @@ def build_translation_classes(actx: PyOpenCLArrayContext,
     nlevels = tree.nlevels
     count = 0
     prev_level = -1
-    from_sep_siblings_translation_classes_level_starts = \
-        np.empty(nlevels+1, dtype=np.int32)
+    from_sep_siblings_translation_classes_level_starts = (
+        np.empty(nlevels + 1, dtype=np.int32))
+
     for i, used in enumerate(actx.to_numpy(translation_class_is_used)):
         cls_without_level = i % num_translation_classes
         level = i // num_translation_classes

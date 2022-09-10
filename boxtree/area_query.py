@@ -29,7 +29,7 @@ import numpy as np
 from pyopencl.elementwise import ElementwiseTemplate
 
 from arraycontext import Array
-from pytools import memoize_method, memoize_in, ProcessLogger
+from pytools import memoize_in, ProcessLogger
 from mako.template import Template
 
 from boxtree.tree import Tree
@@ -45,18 +45,15 @@ __doc__ = """
 Area queries (Balls -> overlapping leaves)
 ------------------------------------------
 
-.. autoclass:: AreaQueryBuilder
-
 .. autoclass:: AreaQueryResult
+.. autofunction:: build_area_query
 
 
 Inverse of area query (Leaves -> overlapping balls)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. autoclass:: LeavesToBallsLookupBuilder
-
 .. autoclass:: LeavesToBallsLookup
-
+.. autofunction:: build_leaves_to_balls_lookup
 
 Space invader queries
 ^^^^^^^^^^^^^^^^^^^^^
@@ -72,61 +69,6 @@ Area queries are implemented using peer lists.
 
 .. autofunction:: build_peer_list
 """
-
-
-# {{{ output
-
-@dataclass_array_container
-@dataclass(frozen=True)
-class AreaQueryResult:
-    """
-    .. attribute:: tree
-
-        The :class:`boxtree.Tree` instance used to build this lookup.
-
-    .. attribute:: leaves_near_ball_starts
-
-        Indices into :attr:`leaves_near_ball_lists`.
-        ``leaves_near_ball_lists[leaves_near_ball_starts[ball_nr]:
-        leaves_near_ball_starts[ball_nr]+1]``
-        results in a list of leaf boxes that intersect `ball_nr`.
-
-    .. attribute:: leaves_near_ball_lists
-
-    .. versionadded:: 2016.1
-    """
-
-    tree: Tree
-    leaves_near_ball_starts: Array
-    leaves_near_ball_lists: Array
-
-
-@dataclass_array_container
-@dataclass(frozen=True)
-class LeavesToBallsLookup:
-    """
-    .. attribute:: tree
-
-        The :class:`boxtree.Tree` instance used to build this lookup.
-
-    .. attribute:: balls_near_box_starts
-
-        Indices into :attr:`balls_near_box_lists`.
-        ``balls_near_box_lists[balls_near_box_starts[ibox]:
-        balls_near_box_starts[ibox]+1]``
-        results in a list of balls that overlap leaf box *ibox*.
-
-        .. note:: Only leaf boxes have non-empty entries in this table. Nonetheless,
-            this list is indexed by the global box index.
-
-    .. attribute:: balls_near_box_lists
-    """
-
-    tree: Tree
-    balls_near_box_starts: Array
-    balls_near_box_lists: Array
-
-# }}}
 
 
 # {{{ kernel templates
@@ -612,26 +554,91 @@ SPACE_INVADER_QUERY_TEMPLATE = AreaQueryElementwiseTemplate(
 # {{{ area query build
 
 class AreaQueryBuilder:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def __call__(self, actx: PyOpenCLArrayContext, tree: Tree,
+                 ball_centers, ball_radii, peer_lists=None,
+                 wait_for=None):
+        from warnings import warn
+        warn(f"'{type(self).__name__}' is deprecated and will be removed in 2023. "
+            "Use 'build_area_query' instead.",
+            DeprecationWarning, stacklevel=2)
+
+        return build_area_query(
+            actx, tree, ball_centers, ball_radii, peer_lists)
+
+
+@dataclass_array_container
+@dataclass(frozen=True)
+class AreaQueryResult:
+    """
+    .. attribute:: tree
+
+        The :class:`boxtree.Tree` instance used to build this lookup.
+
+    .. attribute:: leaves_near_ball_starts
+
+        Indices into :attr:`leaves_near_ball_lists`.
+        ``leaves_near_ball_lists[leaves_near_ball_starts[ball_nr]:
+        leaves_near_ball_starts[ball_nr]+1]``
+        results in a list of leaf boxes that intersect `ball_nr`.
+
+    .. attribute:: leaves_near_ball_lists
+
+    .. versionadded:: 2016.1
+    """
+
+    tree: Tree
+    leaves_near_ball_starts: Array
+    leaves_near_ball_lists: Array
+
+
+def build_area_query(
+        actx: PyOpenCLArrayContext, tree: Tree,
+        ball_centers, ball_radii, peer_lists=None) -> AreaQueryResult:
     r"""Given a set of :math:`l^\infty` "balls", this class helps build a
     look-up table from ball to leaf boxes that intersect with the ball.
 
-    .. versionadded:: 2016.1
-
-    .. automethod:: __init__
-    .. automethod:: __call__
+    :arg ball_centers: an object array of coordinates. Their *dtype* must
+        match *tree*'s :attr:`boxtree.Tree.coord_dtype`.
+    :arg ball_radii: an array of positive numbers. Its *dtype* must match
+        *tree*'s :attr:`boxtree.Tree.coord_dtype`.
+    :arg peer_lists: may either be *None* or an instance of
+        :class:`PeerListLookup` associated with `tree`.
     """
-    def __init__(self, array_context: PyOpenCLArrayContext):
-        self._setup_actx = array_context
 
-    @property
-    def context(self):
-        return self._setup_actx.queue.context
+    # {{{ input check
 
-    # {{{ Kernel generation
+    from pytools import single_valued
+    if single_valued(bc.dtype for bc in ball_centers) != tree.coord_dtype:
+        raise TypeError("ball_centers dtype must match tree.coord_dtype")
 
-    @memoize_method
-    def get_area_query_kernel(self, dimensions, coord_dtype, box_id_dtype,
-                              ball_id_dtype, peer_list_idx_dtype, max_levels):
+    if ball_radii.dtype != tree.coord_dtype:
+        raise TypeError("ball_radii dtype must match tree.coord_dtype")
+
+    ball_id_dtype = tree.particle_id_dtype
+    peer_list_idx_dtype = peer_lists.peer_list_starts.dtype
+
+    from pytools import div_ceil
+    # Avoid generating too many kernels.
+    max_levels = div_ceil(tree.nlevels, 10) * 10
+
+    if peer_lists is None:
+        peer_lists = build_peer_list(actx, tree)
+
+    if len(peer_lists.peer_list_starts) != tree.nboxes + 1:
+        raise ValueError("size of peer lists must match with number of boxes")
+
+    # }}}
+
+    # {{{ area query
+
+    @memoize_in(actx, (
+        build_area_query,
+        tree.dimensions, tree.coord_dtype, tree.box_id_dtype,
+        ball_id_dtype, peer_list_idx_dtype, max_levels))
+    def get_area_query_kernel():
         from pyopencl.tools import dtype_to_ctype
 
         from boxtree import box_flags_enum
@@ -648,13 +655,13 @@ class AreaQueryBuilder:
 
         render_vars = dict(
             np=np,
-            dimensions=dimensions,
+            dimensions=tree.dimensions,
             dtype_to_ctype=dtype_to_ctype,
-            box_id_dtype=box_id_dtype,
+            box_id_dtype=tree.box_id_dtype,
             particle_id_dtype=None,
-            coord_dtype=coord_dtype,
+            coord_dtype=tree.coord_dtype,
             get_coord_vec_dtype=get_coord_vec_dtype,
-            cvec_sub=partial(coord_vec_subscript_code, dimensions),
+            cvec_sub=partial(coord_vec_subscript_code, tree.dimensions),
             max_levels=max_levels,
             AXIS_NAMES=AXIS_NAMES,
             box_flags_enum=box_flags_enum,
@@ -665,26 +672,26 @@ class AreaQueryBuilder:
 
         from boxtree.tools import VectorArg, ScalarArg
         arg_decls = [
-            VectorArg(coord_dtype, "box_centers", with_offset=False),
-            ScalarArg(coord_dtype, "root_extent"),
+            VectorArg(tree.coord_dtype, "box_centers", with_offset=False),
+            ScalarArg(tree.coord_dtype, "root_extent"),
             VectorArg(np.uint8, "box_levels"),
-            ScalarArg(box_id_dtype, "aligned_nboxes"),
-            VectorArg(box_id_dtype, "box_child_ids", with_offset=False),
+            ScalarArg(tree.box_id_dtype, "aligned_nboxes"),
+            VectorArg(tree.box_id_dtype, "box_child_ids", with_offset=False),
             VectorArg(box_flags_enum.dtype, "box_flags"),
             VectorArg(peer_list_idx_dtype, "peer_list_starts"),
-            VectorArg(box_id_dtype, "peer_lists"),
-            VectorArg(coord_dtype, "ball_radii"),
+            VectorArg(tree.box_id_dtype, "peer_lists"),
+            VectorArg(tree.coord_dtype, "ball_radii"),
             ] + [
-            ScalarArg(coord_dtype, "bbox_min_"+ax)
-            for ax in AXIS_NAMES[:dimensions]
+            ScalarArg(tree.coord_dtype, "bbox_min_"+ax)
+            for ax in AXIS_NAMES[:tree.dimensions]
             ] + [
-            VectorArg(coord_dtype, "ball_"+ax)
-            for ax in AXIS_NAMES[:dimensions]]
+            VectorArg(tree.coord_dtype, "ball_"+ax)
+            for ax in AXIS_NAMES[:tree.dimensions]]
 
         from pyopencl.algorithm import ListOfListsBuilder
         area_query_kernel = ListOfListsBuilder(
-            self.context,
-            [("leaves", box_id_dtype)],
+            actx.context,
+            [("leaves", tree.box_id_dtype)],
             str(template.render(**render_vars)),
             arg_decls=arg_decls,
             name_prefix="area_query",
@@ -694,51 +701,10 @@ class AreaQueryBuilder:
         logger.debug("done building area query kernel")
         return area_query_kernel
 
-    # }}}
+    area_query_kernel = get_area_query_kernel()
 
-    def __call__(self, actx: PyOpenCLArrayContext, tree: Tree,
-                 ball_centers, ball_radii, peer_lists=None,
-                 wait_for=None):
-        """
-        :arg ball_centers: an object array of coordinates. Their *dtype* must
-            match *tree*'s :attr:`boxtree.Tree.coord_dtype`.
-        :arg ball_radii: an array of positive numbers. Its *dtype* must match
-            *tree*'s :attr:`boxtree.Tree.coord_dtype`.
-        :arg peer_lists: may either be *None* or an instance of
-            :class:`PeerListLookup` associated with `tree`.
-        :arg wait_for: may either be *None* or a list of :class:`pyopencl.Event`
-            instances for whose completion this command waits before starting
-            exeuction.
-        :returns: a tuple *(aq, event)*, where *aq* is an instance of
-            :class:`AreaQueryResult`, and *event* is a :class:`pyopencl.Event`
-            for dependency management.
-        """
-
-        from pytools import single_valued
-        if single_valued(bc.dtype for bc in ball_centers) != tree.coord_dtype:
-            raise TypeError("ball_centers dtype must match tree.coord_dtype")
-        if ball_radii.dtype != tree.coord_dtype:
-            raise TypeError("ball_radii dtype must match tree.coord_dtype")
-
-        ball_id_dtype = tree.particle_id_dtype  # ?
-
-        from pytools import div_ceil
-        # Avoid generating too many kernels.
-        max_levels = div_ceil(tree.nlevels, 10) * 10
-
-        if peer_lists is None:
-            peer_lists = build_peer_list(actx, tree)
-
-        if len(peer_lists.peer_list_starts) != tree.nboxes + 1:
-            raise ValueError("size of peer lists must match with number of boxes")
-
-        area_query_kernel = self.get_area_query_kernel(tree.dimensions,
-            tree.coord_dtype, tree.box_id_dtype, ball_id_dtype,
-            peer_lists.peer_list_starts.dtype, max_levels)
-
-        aq_plog = ProcessLogger(logger, "area query")
-
-        result, evt = area_query_kernel(
+    with ProcessLogger(logger, "area query"):
+        result, _ = area_query_kernel(
                 actx.queue, len(ball_radii),
                 tree.box_centers.data, tree.root_extent,
                 tree.box_levels, tree.aligned_nboxes,
@@ -749,14 +715,14 @@ class AreaQueryBuilder:
                     + tuple(bc for bc in ball_centers)),
                 )
 
-        aq_plog.done()
+    # }}}
 
-        result = AreaQueryResult(
-                tree=tree,
-                leaves_near_ball_starts=result["leaves"].starts,
-                leaves_near_ball_lists=result["leaves"].lists)
+    result = AreaQueryResult(
+            tree=tree,
+            leaves_near_ball_starts=result["leaves"].starts,
+            leaves_near_ball_lists=result["leaves"].lists)
 
-        return actx.freeze(result), evt
+    return actx.freeze(result)
 
 # }}}
 
@@ -764,66 +730,88 @@ class AreaQueryBuilder:
 # {{{ area query transpose (leaves-to-balls) lookup build
 
 class LeavesToBallsLookupBuilder:
-    r"""Given a set of :math:`l^\infty` "balls", this class helps build a
-    look-up table from leaf boxes to balls that overlap with each leaf box.
-
-    .. automethod:: __init__
-    .. automethod:: __call__
-
-    """
-    def __init__(self, array_context: PyOpenCLArrayContext):
-        from pyopencl.algorithm import KeyValueSorter
-
-        self._setup_actx = array_context
-        self.key_value_sorter = KeyValueSorter(self.context)
-        self.area_query_builder = AreaQueryBuilder(array_context)
-
-    @property
-    def context(self):
-        return self._setup_actx.queue.context
-
-    @memoize_method
-    def get_starts_expander_kernel(self, idx_dtype):
-        """
-        Expands a "starts" array into a length starts[-1] array of increasing
-        indices:
-
-        Eg: [0 2 5 6] => [0 0 1 1 1 2]
-
-        """
-        return STARTS_EXPANDER_TEMPLATE.build(
-                self.context,
-                type_aliases=(("idx_t", idx_dtype),))
+    def __init__(self, *args, **kwargs):
+        pass
 
     def __call__(self, actx: PyOpenCLArrayContext, tree: Tree,
                  ball_centers, ball_radii, peer_lists=None,
                  wait_for=None):
-        """
-        :arg ball_centers: an object array of coordinates. Their *dtype* must
-            match *tree*'s :attr:`boxtree.Tree.coord_dtype`.
-        :arg ball_radii: an array of positive numbers. Its *dtype* must match
-            *tree*'s :attr:`boxtree.Tree.coord_dtype`.
-        :arg peer_lists: may either be *None* or an instance of
-            :class:`PeerListLookup` associated with `tree`.
-        :arg wait_for: may either be *None* or a list of :class:`pyopencl.Event`
-            instances for whose completion this command waits before starting
-            execution.
-        :returns: a tuple *(lbl, event)*, where *lbl* is an instance of
-            :class:`LeavesToBallsLookup`, and *event* is a :class:`pyopencl.Event`
-            for dependency management.
-        """
+        from warnings import warn
+        warn(f"'{type(self).__name__}' is deprecated and will be removed in 2023. "
+            "Use 'build_leaves_to_balls_lookup' instead.",
+            DeprecationWarning, stacklevel=2)
 
-        from pytools import single_valued
-        if single_valued(bc.dtype for bc in ball_centers) != tree.coord_dtype:
-            raise TypeError("ball_centers dtype must match tree.coord_dtype")
-        if ball_radii.dtype != tree.coord_dtype:
-            raise TypeError("ball_radii dtype must match tree.coord_dtype")
+        return build_leaves_to_balls_lookup(
+            actx, tree, ball_centers, ball_radii, peer_lists)
 
-        ltb_plog = ProcessLogger(logger, "leaves-to-balls lookup: run area query")
 
-        area_query, evt = self.area_query_builder(
-                actx, tree, ball_centers, ball_radii, peer_lists, wait_for)
-        wait_for = [evt]
+@dataclass_array_container
+@dataclass(frozen=True)
+class LeavesToBallsLookup:
+    """
+    .. attribute:: tree
+
+        The :class:`boxtree.Tree` instance used to build this lookup.
+
+    .. attribute:: balls_near_box_starts
+
+        Indices into :attr:`balls_near_box_lists`.
+        ``balls_near_box_lists[balls_near_box_starts[ibox]:
+        balls_near_box_starts[ibox]+1]``
+        results in a list of balls that overlap leaf box *ibox*.
+
+        .. note:: Only leaf boxes have non-empty entries in this table. Nonetheless,
+            this list is indexed by the global box index.
+
+    .. attribute:: balls_near_box_lists
+    """
+
+    tree: Tree
+    balls_near_box_starts: Array
+    balls_near_box_lists: Array
+
+
+def build_leaves_to_balls_lookup(
+        actx: PyOpenCLArrayContext, tree: Tree,
+        ball_centers, ball_radii, peer_lists=None) -> LeavesToBallsLookup:
+    r"""Given a set of :math:`l^\infty` "balls", this builds a
+    look-up table from leaf boxes to balls that overlap with each leaf box.
+
+    :arg ball_centers: an object array of coordinates. Their *dtype* must
+        match *tree*'s :attr:`boxtree.Tree.coord_dtype`.
+    :arg ball_radii: an array of positive numbers. Its *dtype* must match
+        *tree*'s :attr:`boxtree.Tree.coord_dtype`.
+    :arg peer_lists: may either be *None* or an instance of
+        :class:`PeerListLookup` associated with `tree`.
+    """
+
+    # {{{ check inputs
+
+    from pytools import single_valued
+    if single_valued(bc.dtype for bc in ball_centers) != tree.coord_dtype:
+        raise TypeError("ball_centers dtype must match tree.coord_dtype")
+
+    if ball_radii.dtype != tree.coord_dtype:
+        raise TypeError("ball_radii dtype must match tree.coord_dtype")
+
+    # }}}
+
+    # {{{ build lookup
+
+    @memoize_in(actx, (build_leaves_to_balls_lookup, tree.box_id_dtype))
+    def get_starts_expander_kernel():
+        return STARTS_EXPANDER_TEMPLATE.build(
+                actx.context,
+                type_aliases=(("idx_t", tree.box_id_dtype),))
+
+    @memoize_in(actx, (build_leaves_to_balls_lookup, "key_value_sorter"))
+    def get_key_value_sorter_kernel():
+        from pyopencl.algorithm import KeyValueSorter
+        return KeyValueSorter(actx.context)
+
+    with ProcessLogger(logger, "leaves-to-balls lookup: run area query"):
+        area_query = build_area_query(
+            actx, tree, ball_centers, ball_radii, peer_lists)
 
         logger.debug("leaves-to-balls lookup: expand starts")
 
@@ -838,34 +826,35 @@ class LeavesToBallsLookupBuilder:
         #
         # 2. Key-value sort the (ball number, box number) pairs by box number.
 
-        starts_expander_knl = self.get_starts_expander_kernel(tree.box_id_dtype)
+        starts_expander_knl = get_starts_expander_kernel()
         expanded_starts = actx.empty(
                 len(area_query.leaves_near_ball_lists), tree.box_id_dtype)
         evt = starts_expander_knl(
                 expanded_starts,
                 area_query.leaves_near_ball_starts,
                 nballs_p_1)
-        wait_for = [evt]
+        expanded_starts.add_event(evt)
 
         logger.debug("leaves-to-balls lookup: key-value sort")
 
-        balls_near_box_starts, balls_near_box_lists, evt \
-                = self.key_value_sorter(
-                        actx.queue,
-                        # keys
-                        area_query.leaves_near_ball_lists,
-                        # values
-                        expanded_starts,
-                        nkeys, starts_dtype=tree.box_id_dtype,
-                        wait_for=wait_for)
-        ltb_plog.done()
+        sorter_knl = get_key_value_sorter_kernel()
+        balls_near_box_starts, balls_near_box_lists = sorter_knl(
+                actx.queue,
+                # keys
+                area_query.leaves_near_ball_lists,
+                # values
+                expanded_starts,
+                nkeys, starts_dtype=tree.box_id_dtype,
+                )
 
-        lookup = LeavesToBallsLookup(
-                tree=tree,
-                balls_near_box_starts=balls_near_box_starts,
-                balls_near_box_lists=balls_near_box_lists)
+    # }}}
 
-        return actx.freeze(lookup), evt
+    lookup = LeavesToBallsLookup(
+            tree=tree,
+            balls_near_box_starts=balls_near_box_starts,
+            balls_near_box_lists=balls_near_box_lists)
+
+    return actx.freeze(lookup)
 
 # }}}
 
@@ -890,7 +879,7 @@ class SpaceInvaderQueryBuilder:
 
 def build_space_invader_query(
         actx: PyOpenCLArrayContext, tree: Tree,
-        ball_centers, ball_radii, peer_lists=None):
+        ball_centers, ball_radii, peer_lists=None) -> Array:
     r"""
     Given a set of :math:`l^\infty` "balls", this class helps build a look-up
     table which maps leaf boxes to the *outer space invader distance*.

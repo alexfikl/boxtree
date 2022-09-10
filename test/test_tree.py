@@ -687,10 +687,8 @@ def test_leaves_to_balls_query(actx_factory, dims, visualize=False):
     ball_centers = make_normal_particle_array(actx, nballs, dims, dtype)
     ball_radii = 0.1 + actx.zeros(nballs, dtype)
 
-    from boxtree.area_query import LeavesToBallsLookupBuilder
-    lblb = LeavesToBallsLookupBuilder(actx)
-
-    lbl, _ = lblb(actx, tree, ball_centers, ball_radii)
+    from boxtree.area_query import build_leaves_to_balls_lookup
+    lbl = build_leaves_to_balls_lookup(actx, tree, ball_centers, ball_radii)
 
     # get data to host for test
     tree = actx.to_numpy(tree)
@@ -726,9 +724,8 @@ def run_area_query_test(actx, tree, ball_centers, ball_radii):
     """
     Performs an area query and checks that the result is as expected.
     """
-    from boxtree.area_query import AreaQueryBuilder
-    aqb = AreaQueryBuilder(actx)
-    area_query, _ = aqb(actx, tree, ball_centers, ball_radii)
+    from boxtree.area_query import build_area_query
+    area_query = build_area_query(actx, tree, ball_centers, ball_radii)
 
     # Get data to host for test.
     tree = actx.to_numpy(tree)
@@ -924,13 +921,12 @@ def test_level_restriction(
         #
         # Note that since this comes from an area query, the self box will be
         # included in the neighbor list.
-        from boxtree.area_query import AreaQueryBuilder
-        aqb = AreaQueryBuilder(actx)
+        from boxtree.area_query import build_area_query
 
         ball_radii = actx.from_numpy(np.min(leaf_box_radii) / 2 + leaf_box_radii)
         leaf_box_centers = [actx.from_numpy(axis) for axis in leaf_box_centers]
 
-        area_query, _ = aqb(actx, tree_dev, leaf_box_centers, ball_radii)
+        area_query = build_area_query(actx, tree_dev, leaf_box_centers, ball_radii)
         area_query = actx.to_numpy(area_query)
         return (area_query.leaves_near_ball_starts,
                 area_query.leaves_near_ball_lists)
@@ -994,14 +990,12 @@ def test_space_invader_query(actx_factory, dims, dtype, visualize=False):
     ball_radii = 0.1 + actx.zeros(nballs, dtype)
 
     from boxtree.area_query import (
-        LeavesToBallsLookupBuilder, build_space_invader_query)
+        build_leaves_to_balls_lookup, build_space_invader_query)
 
     # We can use leaves-to-balls lookup to get the set of overlapping balls for
     # each box, and from there to compute the outer space invader distance.
-    lblb = LeavesToBallsLookupBuilder(actx)
-
     siq = build_space_invader_query(actx, tree, ball_centers, ball_radii)
-    lbl, _ = lblb(actx, tree, ball_centers, ball_radii)
+    lbl = build_leaves_to_balls_lookup(actx, tree, ball_centers, ball_radii)
 
     # get data to host for test
     tree = actx.to_numpy(tree)

@@ -43,7 +43,7 @@ from pytools import memoize_method
 from mako.template import Template
 
 from boxtree.tools import (
-    InlineBinarySearch, get_coord_vec_dtype, coord_vec_subscript_code)
+    inline_binary_search_for_type, get_coord_vec_dtype, coord_vec_subscript_code)
 from boxtree.traversal import TRAVERSAL_PREAMBLE_MAKO_DEFS, FMMTraversalInfo
 from boxtree.array_context import PyOpenCLArrayContext, dataclass_array_container
 
@@ -114,7 +114,7 @@ TRANSLATION_CLASS_FINDER_PREAMBLE_TEMPLATE = Template(r"""//CL:mako//
         %endfor
         return result;
     }
-    """ + str(InlineBinarySearch("box_id_t")),
+    """ + inline_binary_search_for_type("box_id_t"),
     strict_undefined=True)
 
 

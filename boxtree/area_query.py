@@ -29,12 +29,12 @@ import numpy as np
 from pyopencl.elementwise import ElementwiseTemplate
 
 from arraycontext import Array
-from pytools import memoize_method, ProcessLogger
+from pytools import memoize_method, memoize_in, ProcessLogger
 from mako.template import Template
 
 from boxtree.tree import Tree
 from boxtree.tools import (
-    InlineBinarySearch, get_coord_vec_dtype, coord_vec_subscript_code)
+    inline_binary_search_for_type, get_coord_vec_dtype, coord_vec_subscript_code)
 from boxtree.array_context import PyOpenCLArrayContext, dataclass_array_container
 
 import logging
@@ -69,38 +69,13 @@ Peer Lists
 
 Area queries are implemented using peer lists.
 
-.. autoclass:: PeerListFinder
-
 .. autoclass:: PeerListLookup
 
+.. autofunction:: build_peer_list
 """
 
 
 # {{{ output
-
-@dataclass_array_container
-@dataclass(frozen=True)
-class PeerListLookup:
-    """
-    .. attribute:: tree
-
-        The :class:`boxtree.Tree` instance used to build this lookup.
-
-    .. attribute:: peer_list_starts
-
-        Indices into :attr:`peer_lists`.
-        ``peer_lists[peer_list_starts[box_id]:peer_list_starts[box_id]+1]``
-        contains the list of peer boxes of box `box_id`.
-
-    .. attribute:: peer_lists
-
-    .. versionadded:: 2016.1
-    """
-
-    tree: Tree
-    peer_list_starts: Array
-    peer_lists: Array
-
 
 @dataclass_array_container
 @dataclass(frozen=True)
@@ -471,7 +446,7 @@ STARTS_EXPANDER_TEMPLATE = ElementwiseTemplate(
     dst[i] = bsearch(starts, starts_len, i);
     """,
     name="starts_expander",
-    preamble=str(InlineBinarySearch("idx_t")))
+    preamble=inline_binary_search_for_type("idx_t"))
 
 # }}}
 
@@ -648,7 +623,6 @@ class AreaQueryBuilder:
     """
     def __init__(self, array_context: PyOpenCLArrayContext):
         self._setup_actx = array_context
-        self.peer_list_finder = PeerListFinder(array_context)
 
     @property
     def context(self):
@@ -754,8 +728,7 @@ class AreaQueryBuilder:
         max_levels = div_ceil(tree.nlevels, 10) * 10
 
         if peer_lists is None:
-            peer_lists, evt = self.peer_list_finder(actx, tree, wait_for=wait_for)
-            wait_for = [evt]
+            peer_lists = build_peer_list(actx, tree)
 
         if len(peer_lists.peer_list_starts) != tree.nboxes + 1:
             raise ValueError("size of peer lists must match with number of boxes")
@@ -775,7 +748,7 @@ class AreaQueryBuilder:
                 peer_lists.peer_lists, ball_radii,
                 *(tuple(tree.bounding_box[0])
                     + tuple(bc for bc in ball_centers)),
-                wait_for=wait_for)
+                )
 
         aq_plog.done()
 
@@ -924,7 +897,6 @@ class SpaceInvaderQueryBuilder:
     """
     def __init__(self, array_context: PyOpenCLArrayContext) -> None:
         self._setup_actx = array_context
-        self.peer_list_finder = PeerListFinder(array_context)
 
     @property
     def context(self):
@@ -981,8 +953,7 @@ class SpaceInvaderQueryBuilder:
         max_levels = div_ceil(tree.nlevels, 10) * 10
 
         if peer_lists is None:
-            peer_lists, evt = self.peer_list_finder(actx, tree, wait_for=wait_for)
-            wait_for = [evt]
+            peer_lists = build_peer_list(actx, tree)
 
         if len(peer_lists.peer_list_starts) != tree.nboxes + 1:
             raise ValueError("size of peer lists must match with number of boxes")
@@ -1029,42 +1000,58 @@ class SpaceInvaderQueryBuilder:
 
 # {{{ peer list build
 
+@dataclass_array_container
+@dataclass(frozen=True)
+class PeerListLookup:
+    """
+    .. attribute:: tree
 
-class PeerListFinder:
-    """This class builds a look-up table from box numbers to peer boxes. The
-    full definition [1]_ of a peer box is as follows:
+        The :class:`boxtree.Tree` instance used to build this lookup.
 
-        Given a box :math:`b_j` in a quad-tree, :math:`b_k` is a peer box of
-        :math:`b_j` if it is
+    .. attribute:: peer_list_starts
 
-         1. adjacent to :math:`b_j`,
+        Indices into :attr:`peer_lists`.
+        ``peer_lists[peer_list_starts[box_id]:peer_list_starts[box_id]+1]``
+        contains the list of peer boxes of box `box_id`.
 
-         2. of at least the same size as :math:`b_j` (i.e. at the same or a
-            higher level than), and
+    .. attribute:: peer_lists
 
-         3. no child of :math:`b_k` satisfies the above two criteria.
+    .. versionadded:: 2016.1
+    """
+
+    tree: Tree
+    peer_list_starts: Array
+    peer_lists: Array
+
+
+def build_peer_list(actx: PyOpenCLArrayContext, tree: Tree) -> PeerListLookup:
+    """Builds a look-up table from box numbers to peer boxes. The full definition
+    [1]_ of a peer box is as follows:
+
+    Given a box :math:`b_j` in a quad-tree, :math:`b_k` is a peer box of
+    :math:`b_j` if it is
+
+        1. adjacent to :math:`b_j`,
+
+        2. of at least the same size as :math:`b_j` (i.e. at the same or a
+        higher level than), and
+
+        3. no child of :math:`b_k` satisfies the above two criteria.
 
     .. [1] Rachh, Manas, Andreas Klöckner, and Michael O'Neil. "Fast
        algorithms for Quadrature by Expansion I: Globally valid expansions."
-
-    .. versionadded:: 2016.1
-
-    .. automethod:: __init__
-    .. automethod:: __call__
     """
 
-    def __init__(self, array_context: PyOpenCLArrayContext):
-        self._setup_actx = array_context
+    from pytools import div_ceil
 
-    @property
-    def context(self):
-        return self._setup_actx.queue.context
+    # Round up level count--this gets included in the kernel as
+    # a stack bound. Rounding avoids too many kernel versions.
+    max_levels = div_ceil(tree.nlevels, 10) * 10
 
-    # {{{ Kernel generation
-
-    @memoize_method
-    def get_peer_list_finder_kernel(self, dimensions, coord_dtype,
-                                    box_id_dtype, max_levels):
+    @memoize_in(actx, (
+        build_peer_list, tree.dimensions, tree.coord_dtype, tree.box_id_dtype,
+        max_levels))
+    def get_peer_list_finder_kernel():
         from pyopencl.tools import dtype_to_ctype
 
         from boxtree import box_flags_enum
@@ -1082,13 +1069,13 @@ class PeerListFinder:
 
         render_vars = dict(
             np=np,
-            dimensions=dimensions,
+            dimensions=tree.dimensions,
             dtype_to_ctype=dtype_to_ctype,
-            box_id_dtype=box_id_dtype,
+            box_id_dtype=tree.box_id_dtype,
             particle_id_dtype=None,
-            coord_dtype=coord_dtype,
+            coord_dtype=tree.coord_dtype,
             get_coord_vec_dtype=get_coord_vec_dtype,
-            cvec_sub=partial(coord_vec_subscript_code, dimensions),
+            cvec_sub=partial(coord_vec_subscript_code, tree.dimensions),
             max_levels=max_levels,
             AXIS_NAMES=AXIS_NAMES,
             box_flags_enum=box_flags_enum,
@@ -1099,18 +1086,18 @@ class PeerListFinder:
 
         from boxtree.tools import VectorArg, ScalarArg
         arg_decls = [
-            VectorArg(coord_dtype, "box_centers", with_offset=False),
-            ScalarArg(coord_dtype, "root_extent"),
+            VectorArg(tree.coord_dtype, "box_centers", with_offset=False),
+            ScalarArg(tree.coord_dtype, "root_extent"),
             VectorArg(np.uint8, "box_levels"),
-            ScalarArg(box_id_dtype, "aligned_nboxes"),
-            VectorArg(box_id_dtype, "box_child_ids", with_offset=False),
+            ScalarArg(tree.box_id_dtype, "aligned_nboxes"),
+            VectorArg(tree.box_id_dtype, "box_child_ids", with_offset=False),
             VectorArg(box_flags_enum.dtype, "box_flags"),
         ]
 
         from pyopencl.algorithm import ListOfListsBuilder
         peer_list_finder_kernel = ListOfListsBuilder(
-            self.context,
-            [("peers", box_id_dtype)],
+            actx.context,
+            [("peers", tree.box_id_dtype)],
             str(template.render(**render_vars)),
             arg_decls=arg_decls,
             name_prefix="find_peer_lists",
@@ -1120,43 +1107,22 @@ class PeerListFinder:
         logger.debug("done building peer list finder kernel")
         return peer_list_finder_kernel
 
-    # }}}
+    peer_list_finder_kernel = get_peer_list_finder_kernel()
 
-    def __call__(self, actx: PyOpenCLArrayContext, tree: Tree, wait_for=None):
-        """
-        :arg wait_for: may either be *None* or a list of :class:`pyopencl.Event`
-            instances for whose completion this command waits before starting
-            execution.
-        :returns: a tuple *(pl, event)*, where *pl* is an instance of
-            :class:`PeerListLookup`, and *event* is a :class:`pyopencl.Event`
-            for dependency management.
-        """
-        from pytools import div_ceil
-
-        # Round up level count--this gets included in the kernel as
-        # a stack bound. Rounding avoids too many kernel versions.
-        max_levels = div_ceil(tree.nlevels, 10) * 10
-
-        peer_list_finder_kernel = self.get_peer_list_finder_kernel(
-            tree.dimensions, tree.coord_dtype, tree.box_id_dtype, max_levels)
-
-        pl_plog = ProcessLogger(logger, "find peer lists")
-
+    with ProcessLogger(logger, "find peer lists"):
         result, evt = peer_list_finder_kernel(
                 actx.queue, tree.nboxes,
                 tree.box_centers.data, tree.root_extent,
                 tree.box_levels, tree.aligned_nboxes,
                 tree.box_child_ids.data, tree.box_flags,
-                wait_for=wait_for)
+                )
 
-        pl_plog.done()
+    lookup = PeerListLookup(
+            tree=tree,
+            peer_list_starts=result["peers"].starts,
+            peer_lists=result["peers"].lists)
 
-        lookup = PeerListLookup(
-                tree=tree,
-                peer_list_starts=result["peers"].starts,
-                peer_lists=result["peers"].lists)
-
-        return actx.freeze(lookup), evt
+    return actx.freeze(lookup)
 
 # }}}
 

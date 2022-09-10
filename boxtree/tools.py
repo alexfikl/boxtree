@@ -32,7 +32,7 @@ from pyopencl.elementwise import ElementwiseTemplate, ElementwiseKernel
 from pyopencl.tools import dtype_to_c_struct, ScalarArg, VectorArg as _VectorArg
 from mako.template import Template
 
-from pytools import Record, memoize_method, memoize_in
+from pytools import Record, memoize_in
 from pytools.obj_array import make_obj_array
 
 from boxtree.array_context import PyOpenCLArrayContext
@@ -112,8 +112,8 @@ def make_surface_particle_array(actx, nparticles, dims, dtype, seed=15):
             """
             for i
                 <> phi = 2*M_PI / n * i
-                x0[i] = 0.5 * (3*cos(phi) + 2*sin(3*phi))
-                x1[i] = 0.5 * (1*sin(phi) + 1.5*sin(2*phi))
+                x0[i] = 0.5 * (3 * cos(phi) + 2.0 * sin(3 * phi))
+                x1[i] = 0.5 * (1 * sin(phi) + 1.5 * sin(2 * phi))
             end
             """,
             kernel_data=[
@@ -569,14 +569,8 @@ inline size_t bsearch(
 """)
 
 
-class InlineBinarySearch:
-
-    def __init__(self, elem_type_name):
-        self.render_vars = {"elem_t": elem_type_name}
-
-    @memoize_method
-    def __str__(self):
-        return BINARY_SEARCH_TEMPLATE.render(**self.render_vars)
+def inline_binary_search_for_type(elem_type_name: str) -> str:
+    return BINARY_SEARCH_TEMPLATE.render(**{"elem_t": elem_type_name})
 
 # }}}
 

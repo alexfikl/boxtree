@@ -852,8 +852,7 @@ def test_area_query_elwise(actx_factory, dims, visualize=False):
     ball_centers = make_normal_particle_array(actx, nballs, dims, dtype)
     ball_radii = 0.1 + actx.zeros(nballs, dtype)
 
-    from boxtree.area_query import (
-        AreaQueryElementwiseTemplate, PeerListFinder)
+    from boxtree.area_query import AreaQueryElementwiseTemplate, build_peer_list
 
     template = AreaQueryElementwiseTemplate(
         extra_args="""
@@ -870,8 +869,7 @@ def test_area_query_elwise(actx_factory, dims, visualize=False):
         """,
         leaf_found_op="")
 
-    peer_lists, evt = PeerListFinder(actx)(actx, tree)
-
+    peer_lists = build_peer_list(actx, tree)
     kernel = template.generate(
         actx.queue.context,
         dims,
@@ -880,11 +878,10 @@ def test_area_query_elwise(actx_factory, dims, visualize=False):
         peer_lists.peer_list_starts.dtype,
         tree.nlevels)
 
-    evt = kernel(
+    kernel(
         *template.unwrap_args(
             tree, peer_lists, ball_radii, *ball_centers),
         queue=actx.queue,
-        wait_for=[evt],
         range=slice(len(ball_radii)))
 
 # }}}

@@ -59,13 +59,6 @@ class TreeBuilder:
     def __init__(self, array_context: PyOpenCLArrayContext) -> None:
         self._setup_actx = array_context
 
-        # This is used to map box IDs and compress box lists in empty leaf
-        # pruning.
-
-        from boxtree.tools import GappyCopyAndMapKernel, MapValuesKernel
-        self.gappy_copy_and_map = GappyCopyAndMapKernel(array_context)
-        self.map_values_kernel = MapValuesKernel(array_context)
-
     @property
     def context(self):
         return self._setup_actx.queue.context
@@ -626,6 +619,7 @@ class TreeBuilder:
         # regarding this). This flag is set to True when that happens.
         final_level_restrict_iteration = False
 
+        from boxtree.tools import map_values, copy_and_map_gappy
         from pyopencl import wait_for_events
         while level:
             if debug:
@@ -807,13 +801,15 @@ class TreeBuilder:
 
                 wait_for.extend(dst_box_id.events)
 
-                realloc_array = partial(self.gappy_copy_and_map,
+                realloc_array = partial(copy_and_map_gappy,
+                        actx,
                         dst_indices=dst_box_id, range=slice(old_box_count),
                         debug=debug)
-                realloc_and_renumber_array = partial(self.gappy_copy_and_map,
-                        dst_indices=dst_box_id, map_values=dst_box_id,
+                realloc_and_renumber_array = partial(copy_and_map_gappy,
+                        actx,
+                        dst_indices=dst_box_id, mapping=dst_box_id,
                         range=slice(old_box_count), debug=debug)
-                renumber_array = partial(self.map_values_kernel, dst_box_id)
+                renumber_array = partial(map_values, actx, dst_box_id)
 
                 # }}}
 
@@ -830,7 +826,8 @@ class TreeBuilder:
 
                 del new_level_start_box_nrs
             else:
-                from boxtree.tools import realloc_array
+                from boxtree.tools import realloc_array as _realloc_array
+                realloc_array = partial(_realloc_array, actx)
                 realloc_and_renumber_array = realloc_array
                 renumber_array = None
                 level_start_box_nrs_updated = False
@@ -852,20 +849,13 @@ class TreeBuilder:
                     return actx.zeros(shape=shape, dtype=ary.dtype)
 
                 def my_realloc_zeros_nocopy(ary, shape=nboxes_guess):
-                    result = actx.zeros(shape=shape, dtype=ary.dtype)
-                    return result, result.events[0]
+                    return actx.zeros(shape=shape, dtype=ary.dtype)
 
-                my_realloc = partial(
-                    realloc_array,
-                    actx, nboxes_guess, wait_for=wait_for)
+                my_realloc = partial(realloc_array, nboxes_guess)
                 my_realloc_zeros = partial(
-                    realloc_array,
-                    actx, nboxes_guess, zero_fill=True, wait_for=wait_for)
+                    realloc_array, nboxes_guess, zero_fill=True)
                 my_realloc_zeros_and_renumber = partial(
-                    realloc_and_renumber_array,
-                    actx, nboxes_guess, zero_fill=True, wait_for=wait_for)
-
-                resize_events = []
+                    realloc_and_renumber_array, nboxes_guess, zero_fill=True)
 
                 split_box_ids = my_realloc_nocopy(split_box_ids)
 
@@ -874,60 +864,39 @@ class TreeBuilder:
                 # only the box morton bin counts of boxes on the level
                 # currently being processed are written-but we need to
                 # retain the box morton bin counts from the higher levels.
-                box_morton_bin_counts, evt = my_realloc_zeros(box_morton_bin_counts)
-                resize_events.append(evt)
+                box_morton_bin_counts = my_realloc_zeros(box_morton_bin_counts)
 
                 # force_split_box is unused unless level restriction is enabled.
                 if knl_info.level_restrict:
-                    force_split_box, evt = my_realloc_zeros(force_split_box)
-                    resize_events.append(evt)
+                    force_split_box = my_realloc_zeros(force_split_box)
 
-                box_srcntgt_starts, evt = my_realloc_zeros(box_srcntgt_starts)
-                resize_events.append(evt)
+                box_srcntgt_starts = my_realloc_zeros(box_srcntgt_starts)
+                box_srcntgt_counts_cumul = my_realloc_zeros(box_srcntgt_counts_cumul)
+                box_has_children = my_realloc_zeros(box_has_children)
 
-                box_srcntgt_counts_cumul, evt = \
-                        my_realloc_zeros(box_srcntgt_counts_cumul)
-                resize_events.append(evt)
-
-                box_has_children, evt = my_realloc_zeros(box_has_children)
-                resize_events.append(evt)
-
-                box_centers, evts = zip(
-                    *(my_realloc(ary) for ary in box_centers))
-                resize_events.extend(evts)
-
-                box_child_ids, evts = zip(
-                    *(my_realloc_zeros_and_renumber(ary)
-                      for ary in box_child_ids))
-                resize_events.extend(evts)
-
-                box_parent_ids, evt = my_realloc_zeros_and_renumber(box_parent_ids)
-                resize_events.append(evt)
+                box_centers = tuple([my_realloc(ary) for ary in box_centers])
+                box_child_ids = tuple([
+                    my_realloc_zeros_and_renumber(ary) for ary in box_child_ids
+                    ])
+                box_parent_ids = my_realloc_zeros_and_renumber(box_parent_ids)
 
                 if not level_start_box_nrs_updated:
-                    box_levels, evt = my_realloc(box_levels)
-                    resize_events.append(evt)
+                    box_levels = my_realloc(box_levels)
                 else:
-                    box_levels, evt = my_realloc_zeros_nocopy(box_levels)
-                    wait_for_events([evt])
+                    box_levels = my_realloc_zeros_nocopy(box_levels)
                     for box_level, (level_start, level_end) in enumerate(zip(
                             level_start_box_nrs, level_start_box_nrs[1:])):
                         box_levels[level_start:level_end].fill(box_level)
-                    resize_events.extend(box_levels.events)
 
                 if level_start_box_nrs_updated:
-                    srcntgt_box_ids, evt = renumber_array(srcntgt_box_ids)
-                    resize_events.append(evt)
+                    srcntgt_box_ids = renumber_array(srcntgt_box_ids)
 
+                del my_realloc
                 del my_realloc_zeros
                 del my_realloc_nocopy
                 del my_realloc_zeros_nocopy
+                del my_realloc_zeros_and_renumber
                 del renumber_array
-
-                # Can't del on Py2.7 - these are used in generator expressions
-                # above, which are nested scopes
-                my_realloc = None
-                my_realloc_zeros_and_renumber = None
 
                 # retry
                 logger.info("nboxes_guess exceeded: "
@@ -1316,46 +1285,31 @@ class TreeBuilder:
         if should_prune:
             prune_events = []
 
-            prune_empty = partial(self.gappy_copy_and_map,
+            prune_empty = partial(copy_and_map_gappy,
                     actx, nboxes_post_prune,
                     src_indices=src_box_id,
                     range=slice(nboxes_post_prune), debug=debug)
 
-            box_srcntgt_starts, evt = prune_empty(box_srcntgt_starts)
-            prune_events.append(evt)
-
-            box_srcntgt_counts_cumul, evt = prune_empty(box_srcntgt_counts_cumul)
-            prune_events.append(evt)
+            box_srcntgt_starts = prune_empty(box_srcntgt_starts)
+            box_srcntgt_counts_cumul = prune_empty(box_srcntgt_counts_cumul)
 
             if debug and prune_empty_leaves:
                 assert np.all(actx.to_numpy(box_srcntgt_counts_cumul) > 0)
 
-            srcntgt_box_ids, evt = self.map_values_kernel(
-                    dst_box_id, srcntgt_box_ids)
-            prune_events.append(evt)
-
-            box_parent_ids, evt = prune_empty(box_parent_ids, map_values=dst_box_id)
-            prune_events.append(evt)
-
-            box_levels, evt = prune_empty(box_levels)
-            prune_events.append(evt)
+            srcntgt_box_ids = map_values(actx, dst_box_id, srcntgt_box_ids)
+            box_parent_ids = prune_empty(box_parent_ids, mapping=dst_box_id)
+            box_levels = prune_empty(box_levels)
 
             if srcntgts_have_extent:
-                box_srcntgt_counts_nonchild, evt = prune_empty(
-                        box_srcntgt_counts_nonchild)
-                prune_events.append(evt)
+                box_srcntgt_counts_nonchild = (
+                    prune_empty(box_srcntgt_counts_nonchild))
 
-            box_has_children, evt = prune_empty(box_has_children)
-            prune_events.append(evt)
+            box_has_children = prune_empty(box_has_children)
 
-            box_child_ids, evts = zip(
-                *(prune_empty(ary, map_values=dst_box_id)
-                  for ary in box_child_ids))
-            prune_events.extend(evts)
-
-            box_centers, evts = zip(
-                *(prune_empty(ary) for ary in box_centers))
-            prune_events.extend(evts)
+            box_child_ids = tuple([
+                prune_empty(ary, mapping=dst_box_id)
+                for ary in box_child_ids])
+            box_centers = tuple([prune_empty(ary) for ary in box_centers])
 
             # Update box counts and level start box indices.
             box_levels.finish()

@@ -3,11 +3,7 @@ Translation classes data structure
 ----------------------------------
 
 .. autoclass:: TranslationClassesInfo
-
-Build translation classes
--------------------------
-
-.. autoclass:: TranslationClassesBuilder
+.. autofunction:: build_translation_classes
 """
 
 __copyright__ = "Copyright (C) 2019 Matt Wala"
@@ -36,24 +32,23 @@ from functools import partial
 from dataclasses import dataclass
 
 import numpy as np
-from pyopencl.elementwise import ElementwiseTemplate, ElementwiseKernel
+from pyopencl.elementwise import ElementwiseTemplate
 
 from arraycontext import Array
-from pytools import memoize_method
+from pytools import memoize_in, log_process
 from mako.template import Template
 
+from boxtree.tree import Tree
+from boxtree.traversal import TRAVERSAL_PREAMBLE_MAKO_DEFS, FMMTraversalInfo
 from boxtree.tools import (
     inline_binary_search_for_type, get_coord_vec_dtype, coord_vec_subscript_code)
-from boxtree.traversal import TRAVERSAL_PREAMBLE_MAKO_DEFS, FMMTraversalInfo
 from boxtree.array_context import PyOpenCLArrayContext, dataclass_array_container
 
 import logging
 logger = logging.getLogger(__name__)
 
-from pytools import log_process
 
-
-# {{{ translation classes builder
+# {{{ kernel templates
 
 TRANSLATION_CLASS_FINDER_PREAMBLE_TEMPLATE = Template(r"""//CL:mako//
     #define LEVEL_TO_RAD(level) \
@@ -178,10 +173,25 @@ TRANSLATION_CLASS_FINDER_TEMPLATE = ElementwiseTemplate(
     atomic_or(&translation_class_is_used[translation_class], 1);
     """)
 
+# }}}
 
-@dataclass(frozen=True)
-class _KernelInfo:
-    translation_class_finder: ElementwiseKernel
+
+# {{{ translation classes builder
+
+class TranslationClassesBuilder:
+    def __init__(self, *args, **kargs):
+        pass
+
+    def __call__(self, actx: PyOpenCLArrayContext,
+            trav, tree, wait_for=None, is_translation_per_level=True):
+        from warnings import warn
+        warn(f"'{type(self).__name__}' is deprecated and will be removed in 2023. "
+            "Use 'build_rotation_classes' instead.",
+            DeprecationWarning, stacklevel=2)
+
+        return build_translation_classes(
+            actx, trav, tree,
+            is_translation_per_level=is_translation_per_level)
 
 
 @dataclass_array_container
@@ -233,33 +243,54 @@ class TranslationClassesInfo:
         return len(self.from_sep_siblings_translation_class_to_distance_vector)
 
 
-class TranslationClassesBuilder:
-    """Build translation classes for List 2 translations.
+def ntranslation_classes_per_level(well_sep_is_n_away: int, dimensions: int) -> int:
+    return (4 * well_sep_is_n_away + 3) ** dimensions
 
-    .. automethod:: __init__
-    .. automethod:: __call__
-    """
 
-    def __init__(self, array_context: PyOpenCLArrayContext) -> None:
-        self._setup_actx = array_context
+def translation_class_to_normalized_vector(
+        well_sep_is_n_away: int, dimensions: int, nclasses: int
+        ) -> np.ndarray:
+    # This computes the vector for the translation class, using the inverse
+    # of the formula found in get_translation_class() defined in
+    # TRANSLATION_CLASS_FINDER_PREAMBLE_TEMPLATE.
+    assert 0 <= nclasses < ntranslation_classes_per_level(
+        well_sep_is_n_away, dimensions)
 
-    @property
-    def context(self):
-        return self._setup_actx.queue.context
+    result = np.zeros(dimensions, dtype=np.int32)
+    shift = 2 * well_sep_is_n_away + 1
+    base = 4 * well_sep_is_n_away + 3
+    for i in range(dimensions):
+        result[i] = nclasses % base - shift
+        nclasses //= base
 
-    @memoize_method
-    def get_kernel_info(self,
-            dimensions: int,
-            well_sep_is_n_away: int,
-            box_id_dtype: np.dtype,
-            box_level_dtype: np.dtype,
-            coord_dtype: np.dtype,
-            translation_class_per_level) -> None:
+    return result
+
+
+def compute_used_tranlation_classes(
+        actx: PyOpenCLArrayContext, trav: FMMTraversalInfo, tree: Tree, *,
+        is_translation_per_level: bool):
+    # {{{ compute translation classes for list 2
+
+    well_sep_is_n_away = trav.well_sep_is_n_away
+    dimensions = tree.dimensions
+    coord_dtype = tree.coord_dtype
+
+    ntranslation_classes = (
+        ntranslation_classes_per_level(well_sep_is_n_away, dimensions))
+
+    if is_translation_per_level:
+        ntranslation_classes = ntranslation_classes * tree.nlevels
+
+    @memoize_in(actx, (
+        compute_used_tranlation_classes,
+        dimensions, well_sep_is_n_away, tree.box_id_dtype,
+        tree.box_level_dtype, coord_dtype, is_translation_per_level))
+    def get_translation_class_finder_knl():
         coord_vec_dtype = get_coord_vec_dtype(coord_dtype, dimensions)
         int_coord_vec_dtype = get_coord_vec_dtype(np.dtype(np.int32), dimensions)
 
-        num_translation_classes = \
-            self.ntranslation_classes_per_level(well_sep_is_n_away, dimensions)
+        num_translation_classes = (
+            ntranslation_classes_per_level(well_sep_is_n_away, dimensions))
 
         # Make sure translation classes can fit inside a 32 bit integer.
         if not num_translation_classes <= 1 + np.iinfo(np.int32).max:
@@ -269,163 +300,118 @@ class TranslationClassesBuilder:
                 dimensions=dimensions,
                 cvec_sub=partial(coord_vec_subscript_code, dimensions))
 
-        translation_class_finder = (
-                TRANSLATION_CLASS_FINDER_TEMPLATE.build(
-                    self.context,
-                    type_aliases=(
-                        ("int_coord_vec_t", int_coord_vec_dtype),
-                        ("coord_vec_t", coord_vec_dtype),
-                        ("coord_t", coord_dtype),
-                        ("box_id_t", box_id_dtype),
-                        ("box_level_t", box_level_dtype),
-                    ),
-                    var_values=(
-                        ("dimensions", dimensions),
-                        ("ntranslation_classes_per_level", num_translation_classes),
-                        ("translation_class_per_level", translation_class_per_level),
-                        ("cvec_sub", partial(
-                            coord_vec_subscript_code, dimensions)),
-                    ),
-                    more_preamble=preamble))
+        return TRANSLATION_CLASS_FINDER_TEMPLATE.build(
+            actx.context,
+            type_aliases=(
+                ("int_coord_vec_t", int_coord_vec_dtype),
+                ("coord_vec_t", coord_vec_dtype),
+                ("coord_t", coord_dtype),
+                ("box_id_t", tree.box_id_dtype),
+                ("box_level_t", tree.box_level_dtype),
+            ),
+            var_values=(
+                ("dimensions", dimensions),
+                ("ntranslation_classes_per_level", num_translation_classes),
+                ("translation_class_per_level", ntranslation_classes),
+                ("cvec_sub", partial(
+                    coord_vec_subscript_code, dimensions)),
+            ),
+            more_preamble=preamble)
 
-        return _KernelInfo(translation_class_finder=translation_class_finder)
+    translation_classes_lists = actx.empty(
+        len(trav.from_sep_siblings_lists), dtype=np.int32)
+    translation_class_is_used = actx.zeros(ntranslation_classes, dtype=np.int32)
+    error_flag = actx.zeros(1, dtype=np.int32)
 
-    @staticmethod
-    def ntranslation_classes_per_level(
-            well_sep_is_n_away: int, dimensions: int) -> int:
-        return (4 * well_sep_is_n_away + 3) ** dimensions
+    translation_class_finder_knl = get_translation_class_finder_knl()
+    evt = translation_class_finder_knl(
+            trav.from_sep_siblings_lists,
+            trav.from_sep_siblings_starts,
+            trav.target_or_target_parent_boxes,
+            trav.ntarget_or_target_parent_boxes,
+            tree.box_centers,
+            tree.aligned_nboxes,
+            tree.root_extent,
+            tree.box_levels,
+            well_sep_is_n_away,
+            translation_classes_lists,
+            translation_class_is_used,
+            error_flag,
+            queue=actx.queue,
+            )
+    translation_classes_lists.add_event(evt)
+    translation_class_is_used.add_event(evt)
 
-    def translation_class_to_normalized_vector(
-            self, well_sep_is_n_away: int, dimensions: int, cls: type
-            ) -> np.ndarray:
-        # This computes the vector for the translation class, using the inverse
-        # of the formula found in get_translation_class() defined in
-        # TRANSLATION_CLASS_FINDER_PREAMBLE_TEMPLATE.
-        assert 0 <= cls < self.ntranslation_classes_per_level(well_sep_is_n_away,
-                                                              dimensions)
-        result = np.zeros(dimensions, dtype=np.int32)
-        shift = 2 * well_sep_is_n_away + 1
-        base = 4 * well_sep_is_n_away + 3
-        for i in range(dimensions):
-            result[i] = cls % base - shift
-            cls //= base
+    if actx.to_numpy(error_flag)[0]:
+        raise ValueError("could not compute translation classes")
 
-        return result
+    return translation_class_is_used, translation_classes_lists
 
-    def compute_translation_classes(self,
-            actx: PyOpenCLArrayContext, trav, tree, wait_for,
-            is_translation_per_level):
-        """
-        :returns: a :class:`tuple` containing *evt*, *translation_class_is_used*
-            and *translation_classes_lists*.
-        """
+    # }}}
 
-        # {{{ compute translation classes for list 2
 
-        well_sep_is_n_away = trav.well_sep_is_n_away
-        dimensions = tree.dimensions
-        coord_dtype = tree.coord_dtype
+@log_process(logger, "build m2l translation classes")
+def build_translation_classes(actx: PyOpenCLArrayContext,
+        trav: FMMTraversalInfo, tree: Tree, *,
+        is_translation_per_level: bool = True) -> TranslationClassesInfo:
+    """Build translation classes for List 2 translations."""
+    translation_class_is_used, translation_classes_lists = (
+        compute_used_tranlation_classes(actx, trav, tree,
+            is_translation_per_level=is_translation_per_level))
 
-        knl_info = self.get_kernel_info(
-                dimensions, well_sep_is_n_away, tree.box_id_dtype,
-                tree.box_level_dtype, coord_dtype, is_translation_per_level)
+    well_sep_is_n_away = trav.well_sep_is_n_away
+    dimensions = tree.dimensions
 
-        ntranslation_classes = (
-                self.ntranslation_classes_per_level(well_sep_is_n_away, dimensions))
+    used_translation_classes_map = np.empty(
+        len(translation_class_is_used), dtype=np.int32)
+    used_translation_classes_map.fill(-1)
 
-        if is_translation_per_level:
-            ntranslation_classes = ntranslation_classes * tree.nlevels
+    distances = np.empty(
+        (dimensions, len(translation_class_is_used)), dtype=tree.coord_dtype)
+    num_translation_classes = (
+        ntranslation_classes_per_level(well_sep_is_n_away, dimensions))
 
-        translation_classes_lists = actx.empty(
-            len(trav.from_sep_siblings_lists), dtype=np.int32)
-        translation_class_is_used = actx.zeros(ntranslation_classes, dtype=np.int32)
+    nlevels = tree.nlevels
+    count = 0
+    prev_level = -1
+    from_sep_siblings_translation_classes_level_starts = \
+        np.empty(nlevels+1, dtype=np.int32)
+    for i, used in enumerate(actx.to_numpy(translation_class_is_used)):
+        cls_without_level = i % num_translation_classes
+        level = i // num_translation_classes
+        if (prev_level != level):
+            from_sep_siblings_translation_classes_level_starts[level] = count
+            prev_level = level
 
-        error_flag = actx.zeros(1, dtype=np.int32)
-        evt = knl_info.translation_class_finder(
-                trav.from_sep_siblings_lists,
-                trav.from_sep_siblings_starts,
-                trav.target_or_target_parent_boxes,
-                trav.ntarget_or_target_parent_boxes,
-                tree.box_centers,
-                tree.aligned_nboxes,
-                tree.root_extent,
-                tree.box_levels,
-                well_sep_is_n_away,
-                translation_classes_lists,
-                translation_class_is_used,
-                error_flag,
-                queue=actx.queue,
-                wait_for=wait_for)
+        if not used:
+            continue
 
-        if actx.to_numpy(error_flag)[0]:
-            raise ValueError("could not compute translation classes")
+        used_translation_classes_map[i] = count
+        unit_vector = translation_class_to_normalized_vector(
+            well_sep_is_n_away, dimensions, cls_without_level)
 
-        return (evt, translation_class_is_used, translation_classes_lists)
+        distances[:, count] = unit_vector * tree.root_extent / (1 << level)
+        count = count + 1
 
-        # }}}
+    from_sep_siblings_translation_classes_level_starts[nlevels] = count
 
-    @log_process(logger, "build m2l translation classes")
-    def __call__(self, actx: PyOpenCLArrayContext,
-            trav, tree, wait_for=None, is_translation_per_level=True):
-        """Returns a pair *info*, *evt* where info is a
-        :class:`TranslationClassesInfo`.
-        """
-        evt, translation_class_is_used, translation_classes_lists = \
-            self.compute_translation_classes(actx, trav, tree, wait_for,
-                                             is_translation_per_level)
+    translation_classes_lists = actx.from_numpy(
+        used_translation_classes_map
+        )[translation_classes_lists]
 
-        well_sep_is_n_away = trav.well_sep_is_n_away
-        dimensions = tree.dimensions
+    distances = actx.from_numpy(distances)
+    from_sep_siblings_translation_classes_level_starts = actx.from_numpy(
+        from_sep_siblings_translation_classes_level_starts)
 
-        used_translation_classes_map = np.empty(len(translation_class_is_used),
-                                                dtype=np.int32)
-        used_translation_classes_map.fill(-1)
+    info = TranslationClassesInfo(
+            traversal=trav,
+            from_sep_siblings_translation_classes=translation_classes_lists,
+            from_sep_siblings_translation_class_to_distance_vector=distances,
+            from_sep_siblings_translation_classes_level_starts=(
+                from_sep_siblings_translation_classes_level_starts),
+            )
 
-        distances = np.empty((dimensions, len(translation_class_is_used)),
-                             dtype=tree.coord_dtype)
-        num_translation_classes = \
-            self.ntranslation_classes_per_level(well_sep_is_n_away, dimensions)
-
-        nlevels = tree.nlevels
-        count = 0
-        prev_level = -1
-        from_sep_siblings_translation_classes_level_starts = \
-            np.empty(nlevels+1, dtype=np.int32)
-        for i, used in enumerate(actx.to_numpy(translation_class_is_used)):
-            cls_without_level = i % num_translation_classes
-            level = i // num_translation_classes
-            if (prev_level != level):
-                from_sep_siblings_translation_classes_level_starts[level] = count
-                prev_level = level
-
-            if not used:
-                continue
-
-            used_translation_classes_map[i] = count
-            unit_vector = self.translation_class_to_normalized_vector(
-                            well_sep_is_n_away, dimensions, cls_without_level)
-            distances[:, count] = unit_vector * tree.root_extent / (1 << level)
-            count = count + 1
-
-        from_sep_siblings_translation_classes_level_starts[nlevels] = count
-
-        translation_classes_lists = actx.from_numpy(
-            used_translation_classes_map
-            )[translation_classes_lists]
-
-        distances = actx.from_numpy(distances)
-        from_sep_siblings_translation_classes_level_starts = actx.from_numpy(
-            from_sep_siblings_translation_classes_level_starts)
-
-        info = TranslationClassesInfo(
-                traversal=trav,
-                from_sep_siblings_translation_classes=translation_classes_lists,
-                from_sep_siblings_translation_class_to_distance_vector=distances,
-                from_sep_siblings_translation_classes_level_starts=(
-                    from_sep_siblings_translation_classes_level_starts),
-                )
-
-        return actx.freeze(info), evt
+    return actx.freeze(info)
 
 # }}}
 

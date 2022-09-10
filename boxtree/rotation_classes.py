@@ -3,11 +3,7 @@ Rotation classes data structure
 -------------------------------
 
 .. autoclass:: RotationClassesInfo
-
-Build rotation classes
-----------------------
-
-.. autoclass:: RotationClassesBuilder
+.. autofunction:: build_rotation_classes
 """
 
 __copyright__ = "Copyright (C) 2019 Matt Wala"
@@ -37,17 +33,42 @@ from dataclasses import dataclass
 import numpy as np
 
 from arraycontext import Array
+from pytools import log_process
 
-from boxtree.translation_classes import TranslationClassesBuilder
+from boxtree.tree import Tree
+from boxtree.traversal import FMMTraversalInfo
 from boxtree.array_context import PyOpenCLArrayContext, dataclass_array_container
 
 import logging
 logger = logging.getLogger(__name__)
 
-from pytools import log_process
+
+def vec_gcd(vec) -> int:
+    """Return the GCD of a list of integers."""
+    import math
+
+    # TODO: math.gcd supports a list of integers from >= 3.9
+    result = abs(vec[0])
+    for elem in vec[1:]:
+        result = math.gcd(result, abs(elem))
+
+    return result
 
 
 # {{{ rotation classes builder
+
+class RotationClassesBuilder:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def __call__(self, actx, trav, tree, wait_for=None):
+        from warnings import warn
+        warn(f"'{type(self).__name__}' is deprecated and will be removed in 2023. "
+            "Use 'build_rotation_classes' instead.",
+            DeprecationWarning, stacklevel=2)
+
+        return build_rotation_classes(actx, trav, tree)
+
 
 @dataclass_array_container
 @dataclass(frozen=True)
@@ -84,112 +105,95 @@ class RotationClassesInfo:
         return len(self.from_sep_siblings_rotation_class_to_angle)
 
 
-class RotationClassesBuilder:
-    """Build rotation classes for List 2 translations.
+def translation_classes_to_rotation_classes_and_angles(
+        used_translation_classes, well_sep_is_n_away: int, dimensions: int):
+    """Convert translation classes to a list of rotation classes and angles."""
+    angle_to_rot_class = {}
+    angles = []
 
-    .. automethod:: __init__
-    .. automethod:: __call__
-    """
+    from boxtree.translation_classes import ntranslation_classes_per_level
+    ntranslation_classes_per_level = (
+        ntranslation_classes_per_level(well_sep_is_n_away, dimensions))
 
-    def __init__(self, array_context: PyOpenCLArrayContext):
-        self._setup_actx = array_context
-        self.tcb = TranslationClassesBuilder(array_context)
+    translation_class_to_rot_class = (
+            np.empty(ntranslation_classes_per_level, dtype=np.int32))
 
-    @staticmethod
-    def vec_gcd(vec) -> int:
-        """Return the GCD of a list of integers."""
-        import math
+    translation_class_to_rot_class[:] = -1
 
-        # TODO: math.gcd supports a list of integers from >= 3.9
-        result = abs(vec[0])
-        for elem in vec[1:]:
-            result = math.gcd(result, abs(elem))
+    from boxtree.translation_classes import translation_class_to_normalized_vector
+    for cls in used_translation_classes:
+        vec = translation_class_to_normalized_vector(
+            well_sep_is_n_away, dimensions, cls)
 
-        return result
+        # Normalize the translation vector (by dividing by its GCD).
+        #
+        # We need this before computing the cosine of the rotation angle,
+        # because generally in in floating point arithmetic, if k is a
+        # positive scalar and v is a vector, we can't assume
+        #
+        #   kv[-1] / sqrt(|kv|^2) == v[-1] / sqrt(|v|^2).
+        #
+        # Normalizing ensures vectors that are positive integer multiples of
+        # each other get classified into the same equivalence class of
+        # rotations.
+        vec //= vec_gcd(vec)
 
-    def compute_rotation_classes(self,
-            well_sep_is_n_away: int, dimensions: int, used_translation_classes):
-        """Convert translation classes to a list of rotation classes and angles."""
-        angle_to_rot_class = {}
-        angles = []
+        # Compute the rotation angle for the vector.
+        norm = np.linalg.norm(vec)
+        assert norm != 0
+        angle = np.arccos(vec[-1] / norm)
 
-        ntranslation_classes_per_level = (
-                self.tcb.ntranslation_classes_per_level(well_sep_is_n_away,
-                    dimensions))
+        # Find the rotation class.
+        if angle in angle_to_rot_class:
+            rot_class = angle_to_rot_class[angle]
+        else:
+            rot_class = len(angles)
+            angle_to_rot_class[angle] = rot_class
+            angles.append(angle)
 
-        translation_class_to_rot_class = (
-                np.empty(ntranslation_classes_per_level, dtype=np.int32))
+        translation_class_to_rot_class[cls] = rot_class
 
-        translation_class_to_rot_class[:] = -1
+    return translation_class_to_rot_class, angles
 
-        for cls in used_translation_classes:
-            vec = self.tcb.translation_class_to_normalized_vector(
-                    well_sep_is_n_away, dimensions, cls)
 
-            # Normalize the translation vector (by dividing by its GCD).
-            #
-            # We need this before computing the cosine of the rotation angle,
-            # because generally in in floating point arithmetic, if k is a
-            # positive scalar and v is a vector, we can't assume
-            #
-            #   kv[-1] / sqrt(|kv|^2) == v[-1] / sqrt(|v|^2).
-            #
-            # Normalizing ensures vectors that are positive integer multiples of
-            # each other get classified into the same equivalence class of
-            # rotations.
-            vec //= self.vec_gcd(vec)
+@log_process(logger, "build m2l rotation classes")
+def build_rotation_classes(
+        actx: PyOpenCLArrayContext,
+        trav: FMMTraversalInfo, tree: Tree) -> RotationClassesInfo:
+    """Build rotation classes for List 2 translations."""
+    from boxtree.translation_classes import compute_used_tranlation_classes
+    translation_class_is_used, translation_classes_lists = (
+        compute_used_tranlation_classes(actx, trav, tree,
+            is_translation_per_level=False))
 
-            # Compute the rotation angle for the vector.
-            norm = np.linalg.norm(vec)
-            assert norm != 0
-            angle = np.arccos(vec[-1] / norm)
+    d = tree.dimensions
+    n = trav.well_sep_is_n_away
 
-            # Find the rotation class.
-            if angle in angle_to_rot_class:
-                rot_class = angle_to_rot_class[angle]
-            else:
-                rot_class = len(angles)
-                angle_to_rot_class[angle] = rot_class
-                angles.append(angle)
+    # convert translation classes to rotation classes
 
-            translation_class_to_rot_class[cls] = rot_class
+    used_translation_classes = (
+            np.flatnonzero(actx.to_numpy(translation_class_is_used)))
 
-        return translation_class_to_rot_class, angles
+    translation_class_to_rotation_class, rotation_angles = (
+        translation_classes_to_rotation_classes_and_angles(
+            n, d, used_translation_classes))
 
-    @log_process(logger, "build m2l rotation classes")
-    def __call__(self, actx, trav, tree, wait_for=None):
-        """Returns a pair *info*, *evt* where info is a :class:`RotationClassesInfo`.
-        """
-        evt, translation_class_is_used, translation_classes_lists = \
-            self.tcb.compute_translation_classes(actx, trav, tree, wait_for, False)
+    # There should be no more than 2^(d-1) * (2n+1)^d distinct rotation
+    # classes, since that is an upper bound on the number of distinct
+    # positions for list 2 boxes.
+    assert len(rotation_angles) <= 2**(d-1) * (2*n+1)**d
 
-        d = tree.dimensions
-        n = trav.well_sep_is_n_away
+    rotation_classes_lists = actx.from_numpy(
+        translation_class_to_rotation_class
+        )[translation_classes_lists]
+    rotation_angles = actx.from_numpy(np.array(rotation_angles))
 
-        # convert translation classes to rotation classes
+    info = RotationClassesInfo(
+            from_sep_siblings_rotation_classes=rotation_classes_lists,
+            from_sep_siblings_rotation_class_to_angle=rotation_angles,
+            )
 
-        used_translation_classes = (
-                np.flatnonzero(actx.to_numpy(translation_class_is_used)))
-
-        translation_class_to_rotation_class, rotation_angles = (
-                self.compute_rotation_classes(n, d, used_translation_classes))
-
-        # There should be no more than 2^(d-1) * (2n+1)^d distinct rotation
-        # classes, since that is an upper bound on the number of distinct
-        # positions for list 2 boxes.
-        assert len(rotation_angles) <= 2**(d-1) * (2*n+1)**d
-
-        rotation_classes_lists = actx.from_numpy(
-            translation_class_to_rotation_class
-            )[translation_classes_lists]
-        rotation_angles = actx.from_numpy(np.array(rotation_angles))
-
-        info = RotationClassesInfo(
-                from_sep_siblings_rotation_classes=rotation_classes_lists,
-                from_sep_siblings_rotation_class_to_angle=rotation_angles,
-                )
-
-        return actx.freeze(info), evt
+    return actx.freeze(info)
 
 # }}}
 

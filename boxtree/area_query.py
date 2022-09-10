@@ -61,8 +61,7 @@ Inverse of area query (Leaves -> overlapping balls)
 Space invader queries
 ^^^^^^^^^^^^^^^^^^^^^
 
-.. autoclass:: SpaceInvaderQueryBuilder
-
+.. autofunction:: build_space_invader_query
 
 Peer Lists
 ^^^^^^^^^^
@@ -874,6 +873,24 @@ class LeavesToBallsLookupBuilder:
 # {{{ space invader query build
 
 class SpaceInvaderQueryBuilder:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def __call__(self,
+            actx: PyOpenCLArrayContext, tree: Tree,
+            ball_centers, ball_radii, peer_lists=None, wait_for=None):
+        from warnings import warn
+        warn(f"'{type(self).__name__}' is deprecated and will be removed in 2023. "
+            "Use 'build_space_invader_query' instead.",
+            DeprecationWarning, stacklevel=2)
+
+        return build_space_invader_query(
+            actx, tree, ball_centers, ball_radii, peer_lists)
+
+
+def build_space_invader_query(
+        actx: PyOpenCLArrayContext, tree: Tree,
+        ball_centers, ball_radii, peer_lists=None):
     r"""
     Given a set of :math:`l^\infty` "balls", this class helps build a look-up
     table which maps leaf boxes to the *outer space invader distance*.
@@ -889,96 +906,71 @@ class SpaceInvaderQueryBuilder:
 
         \max \left( \{ d_{\infty}(\text{center}(b), \text{center}(b^*))
         : b^* \text{ is a ball}, b^* \cap b \neq \varnothing \}
-        \cup \{ 0 \} \right)
+        \cup \{ 0 \} \right).
 
-    .. automethod:: __init__
-    .. automethod:: __call__
+    :arg ball_centers: an object array of coordinates. Their *dtype* must
+        match *tree*'s :attr:`boxtree.Tree.coord_dtype`.
+    :arg ball_radii: an array of positive numbers. Its *dtype* must match
+        *tree*'s :attr:`boxtree.Tree.coord_dtype`.
+    :arg peer_lists: may either be *None* or an instance of
+        :class:`PeerListLookup` associated with *tree*.
 
+    :returns: an array with *dtype* same as the *tree*'s
+        :attr:`boxtree.Tree.coord_dtype` and its shape is *(tree.nboxes,)*
+        (see :attr:`boxtree.Tree.nboxes`). The entries of the array are
+        indexed by the global box index and are as follows:
+
+        * if *i* is not the index of a leaf box, *sqi[i] = 0*.
+        * if *i* is the index of a leaf box, *sqi[i]* is the
+            outer space invader distance for *i*.
     """
-    def __init__(self, array_context: PyOpenCLArrayContext) -> None:
-        self._setup_actx = array_context
+    # {{{ check inputs
 
-    @property
-    def context(self):
-        return self._setup_actx.queue.context
+    from pytools import single_valued
 
-    # {{{ Kernel generation
+    if single_valued([bc.dtype for bc in ball_centers]) != tree.coord_dtype:
+        raise TypeError("ball_centers dtype must match tree.coord_dtype")
 
-    @memoize_method
-    def get_space_invader_query_kernel(self, dimensions, coord_dtype,
-                box_id_dtype, peer_list_idx_dtype, max_levels):
-        return SPACE_INVADER_QUERY_TEMPLATE.generate(
-                self.context,
-                dimensions,
-                coord_dtype,
-                box_id_dtype,
-                peer_list_idx_dtype,
-                max_levels)
+    if ball_radii.dtype != tree.coord_dtype:
+        raise TypeError("ball_radii dtype must match tree.coord_dtype")
+
+    from pytools import div_ceil
+    # Avoid generating too many kernels.
+    max_levels = div_ceil(tree.nlevels, 10) * 10
+
+    if peer_lists is None:
+        peer_lists = build_peer_list(actx, tree)
+
+    if len(peer_lists.peer_list_starts) != tree.nboxes + 1:
+        raise ValueError("size of peer lists must match with number of boxes")
 
     # }}}
 
-    def __call__(self, actx: PyOpenCLArrayContext, tree: Tree,
-                 ball_centers, ball_radii, peer_lists=None,
-                 wait_for=None):
-        """
-        :arg ball_centers: an object array of coordinates. Their *dtype* must
-            match *tree*'s :attr:`boxtree.Tree.coord_dtype`.
-        :arg ball_radii: an array of positive numbers. Its *dtype* must match
-            *tree*'s :attr:`boxtree.Tree.coord_dtype`.
-        :arg peer_lists: may either be *None* or an instance of
-            :class:`PeerListLookup` associated with *tree*.
-        :arg wait_for: may either be *None* or a list of :class:`pyopencl.Event`
-            instances for whose completion this command waits before starting
-            execution.
-        :returns: a tuple *(sqi, event)*, where *sqi* is an array and *event*
-            is a :class:`pyopencl.Event` for dependency management. The *dtype*
-            of *sqi* is *tree*'s :attr:`boxtree.Tree.coord_dtype` and its shape
-            is *(tree.nboxes,)* (see :attr:`boxtree.Tree.nboxes`).
-            The entries of *sqi* are indexed by the global box index and are
-            as follows:
+    # {{{ build query
 
-            * if *i* is not the index of a leaf box, *sqi[i] = 0*.
-            * if *i* is the index of a leaf box, *sqi[i]* is the
-              outer space invader distance for *i*.
-        """
+    @memoize_in(actx, (
+        build_space_invader_query,
+        tree.dimensions, tree.coord_dtype, tree.box_id_dtype,
+        peer_lists.peer_list_starts.dtype, max_levels))
+    def get_space_invader_query_kernel():
+        return SPACE_INVADER_QUERY_TEMPLATE.generate(
+                actx.context,
+                tree.dimensions,
+                tree.coord_dtype,
+                tree.box_id_dtype,
+                peer_lists.peer_list_starts.dtype,
+                max_levels)
 
-        from pytools import single_valued
-        if single_valued(bc.dtype for bc in ball_centers) != tree.coord_dtype:
-            raise TypeError("ball_centers dtype must match tree.coord_dtype")
-        if ball_radii.dtype != tree.coord_dtype:
-            raise TypeError("ball_radii dtype must match tree.coord_dtype")
+    space_invader_query_kernel = get_space_invader_query_kernel()
 
-        from pytools import div_ceil
-        # Avoid generating too many kernels.
-        max_levels = div_ceil(tree.nlevels, 10) * 10
-
-        if peer_lists is None:
-            peer_lists = build_peer_list(actx, tree)
-
-        if len(peer_lists.peer_list_starts) != tree.nboxes + 1:
-            raise ValueError("size of peer lists must match with number of boxes")
-
-        space_invader_query_kernel = self.get_space_invader_query_kernel(
-            tree.dimensions, tree.coord_dtype, tree.box_id_dtype,
-            peer_lists.peer_list_starts.dtype, max_levels)
-
-        si_plog = ProcessLogger(logger, "space invader query")
-
+    with ProcessLogger(logger, "space invader query"):
         outer_space_invader_dists = actx.zeros(tree.nboxes, np.float32)
-        if not wait_for:
-            wait_for = []
-        wait_for = (wait_for
-                + outer_space_invader_dists.events
-                + ball_radii.events
-                + [evt for bc in ball_centers for evt in bc.events])
-
         evt = space_invader_query_kernel(
                 *SPACE_INVADER_QUERY_TEMPLATE.unwrap_args(
                     tree, peer_lists,
                     ball_radii,
                     outer_space_invader_dists,
                     *tuple(bc for bc in ball_centers)),
-                wait_for=wait_for,
                 queue=actx.queue,
                 range=slice(len(ball_radii)))
 
@@ -991,14 +983,27 @@ class SpaceInvaderQueryBuilder:
                     tree.coord_dtype)
             evt, = outer_space_invader_dists.events
 
-        si_plog.done()
+    # }}}
 
-        return outer_space_invader_dists, evt
+    return actx.freeze(outer_space_invader_dists), evt
 
 # }}}
 
 
 # {{{ peer list build
+
+class PeerListFinder:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def __call__(self, actx: PyOpenCLArrayContext, tree: Tree, wait_for=None):
+        from warnings import warn
+        warn(f"'{type(self).__name__}' is deprecated and will be removed in 2023. "
+            "Use 'build_peer_list' instead.",
+            DeprecationWarning, stacklevel=2)
+
+        return build_peer_list(actx, tree)
+
 
 @dataclass_array_container
 @dataclass(frozen=True)

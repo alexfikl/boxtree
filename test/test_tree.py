@@ -994,14 +994,13 @@ def test_space_invader_query(actx_factory, dims, dtype, visualize=False):
     ball_radii = 0.1 + actx.zeros(nballs, dtype)
 
     from boxtree.area_query import (
-        LeavesToBallsLookupBuilder, SpaceInvaderQueryBuilder)
+        LeavesToBallsLookupBuilder, build_space_invader_query)
 
-    siqb = SpaceInvaderQueryBuilder(actx)
     # We can use leaves-to-balls lookup to get the set of overlapping balls for
     # each box, and from there to compute the outer space invader distance.
     lblb = LeavesToBallsLookupBuilder(actx)
 
-    siq, _ = siqb(actx, tree, ball_centers, ball_radii)
+    siq = build_space_invader_query(actx, tree, ball_centers, ball_radii)
     lbl, _ = lblb(actx, tree, ball_centers, ball_radii)
 
     # get data to host for test

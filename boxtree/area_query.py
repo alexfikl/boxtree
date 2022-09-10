@@ -617,9 +617,6 @@ def build_area_query(
     if ball_radii.dtype != tree.coord_dtype:
         raise TypeError("ball_radii dtype must match tree.coord_dtype")
 
-    ball_id_dtype = tree.particle_id_dtype
-    peer_list_idx_dtype = peer_lists.peer_list_starts.dtype
-
     from pytools import div_ceil
     # Avoid generating too many kernels.
     max_levels = div_ceil(tree.nlevels, 10) * 10
@@ -629,6 +626,9 @@ def build_area_query(
 
     if len(peer_lists.peer_list_starts) != tree.nboxes + 1:
         raise ValueError("size of peer lists must match with number of boxes")
+
+    ball_id_dtype = tree.particle_id_dtype
+    peer_list_idx_dtype = peer_lists.peer_list_starts.dtype
 
     # }}}
 
@@ -838,7 +838,7 @@ def build_leaves_to_balls_lookup(
         logger.debug("leaves-to-balls lookup: key-value sort")
 
         sorter_knl = get_key_value_sorter_kernel()
-        balls_near_box_starts, balls_near_box_lists = sorter_knl(
+        balls_near_box_starts, balls_near_box_lists, _ = sorter_knl(
                 actx.queue,
                 # keys
                 area_query.leaves_near_ball_lists,
@@ -974,7 +974,7 @@ def build_space_invader_query(
 
     # }}}
 
-    return actx.freeze(outer_space_invader_dists), evt
+    return actx.freeze(outer_space_invader_dists)
 
 # }}}
 

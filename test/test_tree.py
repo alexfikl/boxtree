@@ -48,9 +48,7 @@ def test_bounding_box(actx_factory, dtype, dims, nparticles):
     actx = actx_factory()
 
     from boxtree.tools import AXIS_NAMES
-    from boxtree.bounding_box import BoundingBoxFinder
-    bbf = BoundingBoxFinder(actx)
-
+    from boxtree.bounding_box import find_bounding_box
     axis_names = AXIS_NAMES[:dims]
     logger.info("%s - %s %s", dtype, dims, nparticles)
 
@@ -59,7 +57,7 @@ def test_bounding_box(actx_factory, dtype, dims, nparticles):
     bbox_min = [np.min(actx.to_numpy(x)) for x in particles]
     bbox_max = [np.max(actx.to_numpy(x)) for x in particles]
 
-    bbox_cl, evt = bbf(actx, particles, radii=None)
+    bbox_cl = find_bounding_box(actx, particles, radii=None)
     bbox_cl = actx.to_numpy(bbox_cl)
 
     bbox_min_cl = np.empty(dims, dtype)

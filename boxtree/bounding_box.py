@@ -23,7 +23,7 @@ THE SOFTWARE.
 import numpy as np
 from pyopencl.reduction import ReductionTemplate
 
-from pytools import memoize, memoize_method
+from pytools import memoize, memoize_in
 
 from boxtree.tools import get_type_moniker
 from boxtree.array_context import PyOpenCLArrayContext
@@ -119,29 +119,28 @@ BBOX_REDUCTION_TPL = ReductionTemplate(
     name_prefix="bounding_box")
 
 
-class BoundingBoxFinder:
-    def __init__(self, array_context: PyOpenCLArrayContext):
-        self._setup_actx = array_context
+def find_bounding_box(actx: PyOpenCLArrayContext, particles, radii):
+    from pytools import single_valued
+    dimensions = len(particles)
+    coord_dtype = single_valued(coord.dtype for coord in particles)
+    have_radii = radii is not None
 
-        for dev in self.context.devices:
-            if (dev.vendor == "Intel(R) Corporation"
-                    and dev.version == "OpenCL 1.2 (Build 56860)"):
-                raise RuntimeError("bounding box finder does not work "
-                        "properly with this CL runtime.")
+    @memoize_in(actx, (
+        find_bounding_box, dimensions, coord_dtype, have_radii))
+    def get_kernel():
+        dev = actx.queue.device
+        if (dev.vendor == "Intel(R) Corporation"
+                and dev.version == "OpenCL 1.2 (Build 56860)"):
+            raise RuntimeError(
+                f"'find_bounding_box' does not work properly with "
+                f"this CL runtime: {dev}")
 
-    @property
-    def context(self):
-        return self._setup_actx.queue.context
-
-    @memoize_method
-    def get_kernel(self, dimensions, coord_dtype, have_radii):
-        # FIXME: Why does this just use `devices[0]`?
         bbox_dtype, bbox_cdecl = make_bounding_box_dtype(
-                self.context.devices[0], dimensions, coord_dtype)
+                dev, dimensions, coord_dtype)
 
         from boxtree.tools import AXIS_NAMES
         return BBOX_REDUCTION_TPL.build(
-                self.context,
+                actx.context,
                 type_aliases=(
                     ("reduction_t", bbox_dtype),
                     ("bbox_t", bbox_dtype),
@@ -156,22 +155,13 @@ class BoundingBoxFinder:
                     )
                 )
 
-    def __call__(self, actx, particles, radii, wait_for=None):
-        dimensions = len(particles)
+    if radii is None:
+        radii_tuple = ()
+    else:
+        radii_tuple = (radii,)
 
-        from pytools import single_valued
-        coord_dtype = single_valued(coord.dtype for coord in particles)
-
-        if radii is None:
-            radii_tuple = ()
-        else:
-            radii_tuple = (radii,)
-
-        knl = self.get_kernel(dimensions, coord_dtype, have_radii=radii is not None)
-        return knl(
-            *(tuple(particles) + radii_tuple),
-            queue=actx.queue,
-            wait_for=wait_for, return_event=True)
+    knl = get_kernel()
+    return knl(*(tuple(particles) + radii_tuple), queue=actx.queue)
 
 # }}}
 

@@ -59,9 +59,6 @@ class TreeBuilder:
     def __init__(self, array_context: PyOpenCLArrayContext) -> None:
         self._setup_actx = array_context
 
-        from boxtree.bounding_box import BoundingBoxFinder
-        self.bbox_finder = BoundingBoxFinder(array_context)
-
         # This is used to map box IDs and compress box lists in empty leaf
         # pruning.
 
@@ -383,28 +380,28 @@ class TreeBuilder:
 
         # {{{ find and process bounding box
 
+        from boxtree.bounding_box import find_bounding_box
         if bbox is None:
-            bbox, _ = self.bbox_finder(
-                actx, srcntgts, srcntgt_radii, wait_for=wait_for)
+            bbox = find_bounding_box(actx, srcntgts, srcntgt_radii)
             bbox = actx.to_numpy(bbox)
 
-            root_extent = max(
-                bbox["max_"+ax] - bbox["min_"+ax]
-                for ax in axis_names) * (1+TreeBuilder.ROOT_EXTENT_STRETCH_FACTOR)
+            root_extent = (
+                (1 + TreeBuilder.ROOT_EXTENT_STRETCH_FACTOR)
+                * max([bbox[f"max_{ax}"] - bbox[f"min_{ax}"] for ax in axis_names])
+                )
 
             # make bbox square and slightly larger at the top, to ensure scaled
             # coordinates are always < 1
             bbox_min = np.empty(dimensions, coord_dtype)
             for i, ax in enumerate(axis_names):
-                bbox_min[i] = bbox["min_"+ax]
+                bbox_min[i] = bbox[f"min_{ax}"]
 
             bbox_max = bbox_min + root_extent
             for i, ax in enumerate(axis_names):
-                bbox["max_"+ax] = bbox_max[i]
+                bbox[f"max_{ax}"] = bbox_max[i]
         else:
             # Validate that bbox is a superset of particle-derived bbox
-            bbox_auto, _ = self.bbox_finder(
-                    srcntgts, srcntgt_radii, wait_for=wait_for)
+            bbox_auto = find_bounding_box(actx, srcntgts, srcntgt_radii)
             bbox_auto = actx.to_numpy(bbox_auto)
 
             # Convert unstructured numpy array to bbox_type
@@ -413,8 +410,8 @@ class TreeBuilder:
                     bbox_bak = bbox.copy()
                     bbox = np.empty(1, bbox_auto.dtype)
                     for i, ax in enumerate(axis_names):
-                        bbox["min_"+ax] = bbox_bak[i][0]
-                        bbox["max_"+ax] = bbox_bak[i][1]
+                        bbox[f"min_{ax}"] = bbox_bak[i][0]
+                        bbox[f"max_{ax}"] = bbox_bak[i][1]
                 else:
                     assert len(bbox) == 1
             else:
@@ -426,11 +423,11 @@ class TreeBuilder:
             bbox_max = np.empty(dimensions, coord_dtype)
 
             for i, ax in enumerate(axis_names):
-                bbox_min[i] = bbox["min_" + ax]
-                bbox_max[i] = bbox["max_" + ax]
+                bbox_min[i] = bbox[f"min_{ax}"]
+                bbox_max[i] = bbox[f"max_{ax}"]
                 assert bbox_min[i] < bbox_max[i]
-                assert bbox_min[i] <= bbox_auto["min_" + ax]
-                assert bbox_max[i] >= bbox_auto["max_" + ax]
+                assert bbox_min[i] <= bbox_auto[f"min_{ax}"]
+                assert bbox_max[i] >= bbox_auto[f"max_{ax}"]
 
             # bbox must be a square
             bbox_exts = bbox_max - bbox_min

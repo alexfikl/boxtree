@@ -44,7 +44,7 @@ def generate_local_travs(
     # multipole formation and upward propagation within the rank's responsible boxes
     # region. Had there not been such restrictions, some sources might be distributed
     # to more than 1 rank and counted multiple times.
-    local_trav, _ = traversal_builder(
+    local_trav = traversal_builder(
         actx, local_tree,
         source_boxes_mask=local_tree.responsible_boxes_mask,
         source_parent_boxes_mask=local_tree.ancestor_mask

@@ -62,9 +62,8 @@ def test_tree_connectivity(actx_factory, dims, sources_are_targets):
     tb = TreeBuilder(actx)
     tree, _ = tb(actx, sources, max_particles_in_box=30, targets=targets, debug=True)
 
-    from boxtree.traversal import FMMTraversalBuilder
-    tg = FMMTraversalBuilder(actx)
-    trav, _ = tg(actx, tree, debug=True)
+    from boxtree.traversal import build_traversal
+    trav = build_traversal(actx, tree, debug=True)
     tree = actx.to_numpy(tree)
     trav = actx.to_numpy(trav)
 
@@ -285,9 +284,8 @@ def test_plot_traversal(actx_factory, well_sep_is_n_away=1, visualize=False):
         tb = TreeBuilder(actx)
         tree, _ = tb(actx, particles, max_particles_in_box=30, debug=True)
 
-        from boxtree.traversal import FMMTraversalBuilder
-        tg = FMMTraversalBuilder(actx, well_sep_is_n_away=well_sep_is_n_away)
-        trav, _ = tg(actx, tree)
+        from boxtree.traversal import build_traversal
+        trav = build_traversal(actx, tree, well_sep_is_n_away=well_sep_is_n_away)
 
         tree = actx.to_numpy(tree)
         trav = actx.to_numpy(trav)
@@ -341,13 +339,11 @@ def test_from_sep_siblings_translation_and_rotation_classes(
 
     # {{{ build traversal
 
-    from boxtree.traversal import FMMTraversalBuilder
+    from boxtree.traversal import build_traversal
     from boxtree.rotation_classes import build_rotation_classes
     from boxtree.translation_classes import build_translation_classes
 
-    tg = FMMTraversalBuilder(actx, well_sep_is_n_away=well_sep_is_n_away)
-    trav, _ = tg(actx, tree)
-
+    trav = build_traversal(actx, tree, well_sep_is_n_away=well_sep_is_n_away)
     result = build_rotation_classes(actx, trav, tree)
     result_tb = build_translation_classes(actx, trav, tree)
 

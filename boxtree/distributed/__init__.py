@@ -186,7 +186,7 @@ def construct_distributed_wrangler(
         global_tree_dev = actx.from_numpy(global_tree_host)
     global_tree_dev = actx.thaw(global_tree_dev)
 
-    global_trav_dev, _ = traversal_builder(actx, global_tree_dev)
+    global_trav_dev = traversal_builder(actx, global_tree_dev)
     global_trav_host = actx.to_numpy(global_trav_dev)
 
     if tree_in_device_memory:

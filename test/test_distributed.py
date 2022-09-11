@@ -78,8 +78,11 @@ def _test_against_shared(
     with patch.dict(os.environ, {"XDG_CACHE_HOME": rank_cache_dir}):
         actx = _acf()
 
-        from boxtree.traversal import FMMTraversalBuilder
-        tg = FMMTraversalBuilder(actx, well_sep_is_n_away=2)
+        from functools import partial
+        from boxtree.traversal import build_traversal
+        build_traversal = partial(build_traversal,
+            well_sep_is_n_away=2,
+            debug=True)
 
         tree_indep = FMMLibTreeIndependentDataForWrangler(
             dims, Kernel.HELMHOLTZ if helmholtz_k else Kernel.LAPLACE)
@@ -102,7 +105,7 @@ def _test_against_shared(
                 actx, sources, targets=targets, target_radii=target_radii,
                 stick_out_factor=0.25, max_particles_in_box=30, debug=True)
 
-            d_trav, _ = tg(actx, global_tree_dev, debug=True)
+            d_trav = build_traversal(actx, global_tree_dev)
             global_traversal_host = actx.to_numpy(d_trav)
             global_tree_host = global_traversal_host.tree
 
@@ -129,7 +132,7 @@ def _test_against_shared(
 
         from boxtree.distributed import DistributedFMMRunner
         distribued_fmm_info = DistributedFMMRunner(
-            actx, global_tree_host, tg, wrangler_factory, comm=comm)
+            actx, global_tree_host, build_traversal, wrangler_factory, comm=comm)
 
         timing_data = {}
         pot_dfmm = distribued_fmm_info.drive_dfmm(
@@ -234,11 +237,9 @@ def _test_constantone(tmp_cache_basedir, dims, nsources, ntargets, dtype):
     with patch.dict(os.environ, {"XDG_CACHE_HOME": rank_cache_dir}):
         actx = _acf()
 
-        from boxtree.traversal import FMMTraversalBuilder
-        tg = FMMTraversalBuilder(actx)
+        from boxtree.traversal import build_traversal
 
         if rank == 0:
-
             # Generate random particles
             from boxtree.tools import make_normal_particle_array as p_normal
             sources = p_normal(actx, nsources, dims, dtype, seed=15)
@@ -263,7 +264,7 @@ def _test_constantone(tmp_cache_basedir, dims, nsources, ntargets, dtype):
 
         from boxtree.distributed import DistributedFMMRunner
         distributed_fmm_info = DistributedFMMRunner(
-            actx, tree, tg, wrangler_factory, comm=MPI.COMM_WORLD)
+            actx, tree, build_traversal, wrangler_factory, comm=MPI.COMM_WORLD)
 
         pot_dfmm = distributed_fmm_info.drive_dfmm(actx, [sources_weights])
 

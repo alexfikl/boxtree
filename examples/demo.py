@@ -30,9 +30,8 @@ from boxtree import TreeBuilder
 tb = TreeBuilder(actx)
 tree, _ = tb(actx, particles, max_particles_in_box=5)
 
-from boxtree.traversal import FMMTraversalBuilder
-tg = FMMTraversalBuilder(actx)
-trav, _ = tg(actx, tree)
+from boxtree.traversal import build_traversal
+trav = build_traversal(actx, tree)
 
 # ENDEXAMPLE
 

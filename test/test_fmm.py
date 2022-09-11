@@ -216,11 +216,11 @@ def test_fmm_completeness(actx_factory, dims, nsources_req, ntargets_req,
         import matplotlib.pyplot as pt
         pt.show()
 
-    from boxtree.traversal import FMMTraversalBuilder
-    tbuild = FMMTraversalBuilder(actx,
-            well_sep_is_n_away=well_sep_is_n_away,
-            from_sep_smaller_crit=from_sep_smaller_crit)
-    trav, _ = tbuild(actx, tree, debug=True)
+    from boxtree.traversal import build_traversal
+    trav = build_traversal(actx, tree,
+        well_sep_is_n_away=well_sep_is_n_away,
+        from_sep_smaller_crit=from_sep_smaller_crit,
+        debug=True)
 
     if who_has_extent:
         pre_merge_trav = trav
@@ -412,9 +412,8 @@ def test_pyfmmlib_fmm(actx_factory, dims, use_dipoles, helmholtz_k):
     tree, _ = tb(actx, sources, targets=targets,
             max_particles_in_box=30, debug=True)
 
-    from boxtree.traversal import FMMTraversalBuilder
-    tbuild = FMMTraversalBuilder(actx)
-    trav, _ = tbuild(actx, tree, debug=True)
+    from boxtree.traversal import build_traversal
+    trav = build_traversal(actx, tree, debug=True)
 
     trav = actx.to_numpy(trav)
 
@@ -559,9 +558,8 @@ def test_pyfmmlib_numerical_stability(actx_factory, dims, helmholtz_k, order):
 
     assert tree.nlevels >= 15
 
-    from boxtree.traversal import FMMTraversalBuilder
-    tbuild = FMMTraversalBuilder(actx)
-    trav, _ = tbuild(actx, tree, debug=True)
+    from boxtree.traversal import build_traversal
+    trav = build_traversal(actx, tree, debug=True)
 
     trav = actx.to_numpy(trav)
     weights = np.ones_like(sources[0])
@@ -643,10 +641,10 @@ def test_interaction_list_particle_count_thresholding(actx_factory, enable_exten
             target_radii=target_radii,
             debug=True, stick_out_factor=0.25)
 
-    from boxtree.traversal import FMMTraversalBuilder
-    tbuild = FMMTraversalBuilder(actx)
-    trav, _ = tbuild(actx, tree, debug=True,
-            _from_sep_smaller_min_nsources_cumul=from_sep_smaller_min_nsources_cumul)
+    from boxtree.traversal import build_traversal
+    trav = build_traversal(actx, tree,
+        debug=True,
+        _from_sep_smaller_min_nsources_cumul=from_sep_smaller_min_nsources_cumul)
 
     weights = np.ones(nsources)
     weights_sum = np.sum(weights)
@@ -698,9 +696,8 @@ def test_fmm_float32(actx_factory, enable_extents):
             target_radii=target_radii,
             debug=True, stick_out_factor=0.25)
 
-    from boxtree.traversal import FMMTraversalBuilder
-    tbuild = FMMTraversalBuilder(actx)
-    trav, _ = tbuild(actx, tree, debug=True)
+    from boxtree.traversal import build_traversal
+    trav = build_traversal(actx, tree, debug=True)
 
     weights = np.ones(nsources)
     weights_sum = np.sum(weights)
@@ -742,9 +739,8 @@ def test_fmm_with_optimized_3d_m2l(actx_factory, nsrcntgts, helmholtz_k,
     tree, _ = tb(actx, sources, targets=targets,
             max_particles_in_box=30, debug=True)
 
-    from boxtree.traversal import FMMTraversalBuilder
-    tbuild = FMMTraversalBuilder(actx)
-    trav, _ = tbuild(actx, tree, debug=True)
+    from boxtree.traversal import build_traversal
+    trav = build_traversal(actx, tree, debug=True)
     trav = actx.to_numpy(trav)
 
     rng = np.random.default_rng(20)

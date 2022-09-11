@@ -76,9 +76,8 @@ def test_compare_cl_and_py_cost_model(actx_factory, nsources, ntargets, dims, dt
         stick_out_factor=0.15, max_particles_in_box=30, debug=True
     )
 
-    from boxtree.traversal import FMMTraversalBuilder
-    tg = FMMTraversalBuilder(actx, well_sep_is_n_away=2)
-    trav_dev, _ = tg(actx, tree, debug=True)
+    from boxtree.traversal import build_traversal
+    trav_dev = build_traversal(actx, tree, well_sep_is_n_away=2, debug=True)
     trav = actx.to_numpy(trav_dev)
 
     # }}}
@@ -415,9 +414,8 @@ def test_estimate_calibration_params(actx_factory):
             stick_out_factor=0.15, max_particles_in_box=30, debug=True
         )
 
-        from boxtree.traversal import FMMTraversalBuilder
-        tg = FMMTraversalBuilder(actx, well_sep_is_n_away=2)
-        trav_dev, _ = tg(actx, tree, debug=True)
+        from boxtree.traversal import build_traversal
+        trav_dev = build_traversal(actx, tree, well_sep_is_n_away=2, debug=True)
         trav = actx.to_numpy(trav_dev)
 
         traversals.append(trav)
@@ -546,9 +544,8 @@ def test_cost_model_op_counts_agree_with_constantone_wrangler(
         stick_out_factor=0.15, max_particles_in_box=30, debug=True
     )
 
-    from boxtree.traversal import FMMTraversalBuilder
-    tg = FMMTraversalBuilder(actx, well_sep_is_n_away=2)
-    trav_dev, _ = tg(actx, tree, debug=True)
+    from boxtree.traversal import build_traversal
+    trav_dev = build_traversal(actx, tree, well_sep_is_n_away=2, debug=True)
     trav = actx.to_numpy(trav_dev)
 
     from boxtree.constant_one import (

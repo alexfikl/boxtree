@@ -362,8 +362,8 @@ class Tree:
     particle's extents) inside of the box.  If the box is empty, both *min* and *max*
     will reflect the box center.  The purpose of this information is to reduce the
     cost of some interactions through knowledge that some boxes are partially empty.
-    (See the *from_sep_smaller_crit* argument to the constructor of
-    :class:`boxtree.traversal.FMMTraversalBuilder` for an example.)
+    (See the *from_sep_smaller_crit* argument to
+    :func:`boxtree.traversal.build_traversal` for an example.)
 
     .. note::
 

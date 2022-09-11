@@ -122,7 +122,7 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class _KernelInfo:
+class TreeBuildKernelInfo:
     particle_id_dtype: np.dtype
     box_id_dtype: np.dtype
     morton_bin_count_dtype: np.dtype
@@ -1834,7 +1834,7 @@ def get_tree_build_kernel_info(context, dimensions, coord_dtype,
 
     # }}}
 
-    return _KernelInfo(
+    return TreeBuildKernelInfo(
             particle_id_dtype=particle_id_dtype,
             box_id_dtype=box_id_dtype,
             morton_bin_count_dtype=morton_bin_count_dtype,

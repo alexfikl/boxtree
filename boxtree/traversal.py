@@ -3,13 +3,7 @@ Traversal data structure
 ------------------------
 
 .. autoclass:: FMMTraversalInfo
-
-Build Entrypoint
-----------------
-
-.. autoclass:: FMMTraversalBuilder
-
-    .. automethod:: __call__
+.. autofunction:: build_traversal
 """
 
 __copyright__ = "Copyright (C) 2012 Andreas Kloeckner"
@@ -37,13 +31,14 @@ THE SOFTWARE.
 import enum
 from functools import partial
 from dataclasses import dataclass
+from typing import Optional
 
 import numpy as np
 from pyopencl.algorithm import ListOfListsBuilder
 from pyopencl.elementwise import ElementwiseTemplate, ElementwiseKernel
 
 from arraycontext import Array
-from pytools import ProcessLogger, log_process, memoize_method, memoize_in
+from pytools import ProcessLogger, log_process, memoize_on_first_arg
 from pytools.obj_array import make_obj_array
 from mako.template import Template
 
@@ -1250,6 +1245,8 @@ def merge_lists(
 
     # {{{ merge lists
 
+    from pytools import memoize_in
+
     @memoize_in(actx, (merge_lists, box_id_dtype, nlists))
     def get_list_merger_kernel(with_write_counts):
         return LIST_MERGER_TEMPLATE.build(
@@ -1659,7 +1656,7 @@ class FMMTraversalInfo:
 
 
 @dataclass(frozen=True)
-class _KernelInfo:
+class TraversalKernelInfo:
     sources_parents_and_targets_builder: ListOfListsBuilder
     level_start_box_nrs_extractor: ElementwiseKernel
     same_level_non_well_sep_boxes_builder: ListOfListsBuilder
@@ -1674,9 +1671,10 @@ class FMMTraversalBuilder:
     .. automethod:: __init__
     """
 
-    def __init__(self, array_context: PyOpenCLArrayContext, *,
-            well_sep_is_n_away=1,
-            from_sep_smaller_crit=None) -> None:
+    def __init__(self,
+            array_context: PyOpenCLArrayContext, *,
+            well_sep_is_n_away: int = 1,
+            from_sep_smaller_crit: Optional[str] = None) -> None:
         """
         :arg well_sep_is_n_away: Either An integer 1 or greater.
             (Only 1 and 2 are tested.)
@@ -1696,559 +1694,592 @@ class FMMTraversalBuilder:
         self.well_sep_is_n_away = well_sep_is_n_away
         self.from_sep_smaller_crit = from_sep_smaller_crit
 
-    @property
-    def context(self):
-        return self._setup_actx.queue.context
-
-    # {{{ kernel builder
-
-    @memoize_method
-    @log_process(logger)
-    def get_kernel_info(self, dimensions, particle_id_dtype, box_id_dtype,
-            coord_dtype, box_level_dtype, max_levels,
-            sources_are_targets, sources_have_extent, targets_have_extent,
-            extent_norm,
-            source_boxes_has_mask,
-            source_parent_boxes_has_mask,
-            debug=False):
-
-        # {{{ process from_sep_smaller_crit
-
-        from_sep_smaller_crit = self.from_sep_smaller_crit
-
-        if from_sep_smaller_crit is None:
-            from_sep_smaller_crit = "precise_linf"
-
-        if extent_norm == "linf":
-            # no special checks needed
-            pass
-
-        elif extent_norm == "l2":
-            if from_sep_smaller_crit == "static_linf":
-                # Not technically necessary, but static linf will assume box
-                # bounds that are not guaranteed to contain all particle
-                # extents.
-                raise ValueError(
-                        "The static l^inf from-sep-smaller criterion "
-                        "cannot be used with the l^2 extent norm")
-
-        elif extent_norm is None:
-            assert not (sources_have_extent or targets_have_extent)
-
-            if from_sep_smaller_crit is None:
-                # doesn't matter
-                from_sep_smaller_crit = "static_linf"
-
-        else:
-            raise ValueError("unexpected value of 'extent_norm': %s"
-                    % extent_norm)
-
-        if from_sep_smaller_crit not in [
-                "static_linf", "precise_linf",
-                "static_l2",
-                ]:
-            raise ValueError("unexpected value of 'from_sep_smaller_crit': %s"
-                    % from_sep_smaller_crit)
-
-        # }}}
-
-        from pyopencl.tools import dtype_to_ctype
-
-        from boxtree.tree import box_flags_enum
-        from boxtree.tools import AXIS_NAMES
-
-        render_vars = dict(
-                np=np,
-                dimensions=dimensions,
-                dtype_to_ctype=dtype_to_ctype,
-                particle_id_dtype=particle_id_dtype,
-                box_id_dtype=box_id_dtype,
-                box_flags_enum=box_flags_enum,
-                coord_dtype=coord_dtype,
-                get_coord_vec_dtype=get_coord_vec_dtype,
-                cvec_sub=partial(coord_vec_subscript_code, dimensions),
-                max_levels=max_levels,
-                AXIS_NAMES=AXIS_NAMES,
-                debug=debug,
-                sources_are_targets=sources_are_targets,
-                sources_have_extent=sources_have_extent,
-                targets_have_extent=targets_have_extent,
-                well_sep_is_n_away=self.well_sep_is_n_away,
-                from_sep_smaller_crit=from_sep_smaller_crit,
-                source_boxes_has_mask=source_boxes_has_mask,
-                source_parent_boxes_has_mask=source_parent_boxes_has_mask
-                )
-        from pyopencl.algorithm import ListOfListsBuilder
-        from boxtree.tools import VectorArg, ScalarArg
-
-        result = {}
-
-        # {{{ source boxes, their parents, target boxes
-
-        src = Template(
-                TRAVERSAL_PREAMBLE_TEMPLATE
-                + SOURCES_PARENTS_AND_TARGETS_TEMPLATE,
-                strict_undefined=True).render(**render_vars)
-
-        arg_decls = [VectorArg(box_flags_enum.dtype, "box_flags")]
-        if source_boxes_has_mask:
-            arg_decls.append(VectorArg(np.int8, "source_boxes_mask"))
-        if source_parent_boxes_has_mask:
-            arg_decls.append(VectorArg(np.int8, "source_parent_boxes_mask"))
-
-        result["sources_parents_and_targets_builder"] = \
-                ListOfListsBuilder(self.context,
-                        [
-                            ("source_parent_boxes", box_id_dtype),
-                            ("source_boxes", box_id_dtype),
-                            ("target_or_target_parent_boxes", box_id_dtype)
-                            ] + (
-                                [("target_boxes", box_id_dtype)]
-                                if not sources_are_targets
-                                else []),
-                        str(src),
-                        arg_decls=arg_decls,
-                        debug=debug,
-                        name_prefix="sources_parents_and_targets")
-
-        result["level_start_box_nrs_extractor"] = \
-                LEVEL_START_BOX_NR_EXTRACTOR_TEMPLATE.build(self.context,
-                    type_aliases=(
-                        ("box_id_t", box_id_dtype),
-                        ("box_level_t", box_level_dtype),
-                        ),
-                    )
-
-        # }}}
-
-        # {{{ build list N builders
-
-        base_args = [
-                VectorArg(coord_dtype, "box_centers", with_offset=False),
-                ScalarArg(coord_dtype, "root_extent"),
-                VectorArg(np.uint8, "box_levels"),
-                ScalarArg(box_id_dtype, "aligned_nboxes"),
-                VectorArg(box_id_dtype, "box_child_ids", with_offset=False),
-                VectorArg(box_flags_enum.dtype, "box_flags"),
-                ]
-
-        for list_name, template, extra_args, extra_lists, eliminate_empty_list in [
-                ("same_level_non_well_sep_boxes",
-                    SAME_LEVEL_NON_WELL_SEP_BOXES_TEMPLATE, [], [], []),
-                ("neighbor_source_boxes", NEIGBHOR_SOURCE_BOXES_TEMPLATE,
-                        [
-                            VectorArg(box_id_dtype, "target_boxes"),
-                            ], [], []),
-                ("from_sep_siblings", FROM_SEP_SIBLINGS_TEMPLATE,
-                        [
-                            VectorArg(box_id_dtype, "target_or_target_parent_boxes"),
-                            VectorArg(box_id_dtype, "box_parent_ids",
-                                with_offset=False),
-                            VectorArg(box_id_dtype,
-                                "same_level_non_well_sep_boxes_starts"),
-                            VectorArg(box_id_dtype,
-                                "same_level_non_well_sep_boxes_lists"),
-                            ], [], []),
-                ("from_sep_smaller", FROM_SEP_SMALLER_TEMPLATE,
-                        [
-                            ScalarArg(coord_dtype, "stick_out_factor"),
-                            VectorArg(box_id_dtype, "target_boxes"),
-                            VectorArg(box_id_dtype,
-                                "same_level_non_well_sep_boxes_starts"),
-                            VectorArg(box_id_dtype,
-                                "same_level_non_well_sep_boxes_lists"),
-                            VectorArg(coord_dtype, "box_target_bounding_box_min",
-                                with_offset=False),
-                            VectorArg(coord_dtype, "box_target_bounding_box_max",
-                                with_offset=False),
-                            VectorArg(particle_id_dtype, "box_source_counts_cumul"),
-                            ScalarArg(particle_id_dtype,
-                                "from_sep_smaller_min_nsources_cumul"),
-                            ScalarArg(box_id_dtype, "from_sep_smaller_source_level"),
-                            ],
-                            ["from_sep_close_smaller"]
-                            if sources_have_extent or targets_have_extent
-                            else [], ["from_sep_smaller"]),
-                ("from_sep_bigger", FROM_SEP_BIGGER_TEMPLATE,
-                        [
-                            ScalarArg(coord_dtype, "stick_out_factor"),
-                            VectorArg(box_id_dtype, "target_or_target_parent_boxes"),
-                            VectorArg(box_id_dtype, "box_parent_ids",
-                                with_offset=False),
-                            VectorArg(box_id_dtype,
-                                "same_level_non_well_sep_boxes_starts"),
-                            VectorArg(box_id_dtype,
-                                "same_level_non_well_sep_boxes_lists"),
-                            ],
-                            ["from_sep_close_bigger"]
-                            if sources_have_extent or targets_have_extent
-                            else [], []),
-                ]:
-            src = Template(
-                    TRAVERSAL_PREAMBLE_TEMPLATE
-                    + HELPER_FUNCTION_TEMPLATE
-                    + template,
-                    strict_undefined=True).render(**render_vars)
-
-            result[f"{list_name}_builder"] = ListOfListsBuilder(self.context,
-                    [(list_name, box_id_dtype)]
-                    + [(extra_list_name, box_id_dtype)
-                        for extra_list_name in extra_lists],
-                    str(src),
-                    arg_decls=base_args + extra_args,
-                    debug=debug, name_prefix=list_name,
-                    complex_kernel=True,
-                    eliminate_empty_output_lists=eliminate_empty_list)
-
-        # }}}
-
-        return _KernelInfo(**result)
-
-    # }}}
-
-    # {{{ driver
-
     def __call__(self, actx: PyOpenCLArrayContext, tree: Tree,
                 wait_for=None, debug=False,
                  _from_sep_smaller_min_nsources_cumul=None,
                  source_boxes_mask=None,
                  source_parent_boxes_mask=None):
-        """
-        :arg wait_for: may either be *None* or a list of :class:`pyopencl.Event`
-            instances for whose completion this command waits before starting
-            exeuction.
-        :arg source_boxes_mask: Only boxes passing this mask will be considered for
-            `source_boxes`. Used by the distributed implementation.
-        :arg source_parent_boxes_mask: Only boxes passing this mask will be
-            considered for `source_parent_boxes`. Used by the distributed
-            implementation.
-        :return: A :class:`tuple` *(trav, event)*, where *trav* is a new instance of
-            :class:`FMMTraversalInfo` and *event* is a :class:`pyopencl.Event`
-            for dependency management.
-        """
-        if _from_sep_smaller_min_nsources_cumul is None:
-            # default to old no-threshold behavior
-            _from_sep_smaller_min_nsources_cumul = 0
-
-        if not tree._is_pruned:
-            raise ValueError("tree must be pruned for traversal generation")
-
-        if tree.sources_have_extent:
-            # YAGNI
-            raise NotImplementedError(
-                    "trees with source extent are not supported for "
-                    "traversal generation")
-
-        # Generated code shouldn't depend on the *exact* number of tree levels.
-        # So round up to the next multiple of 5.
-        from pytools import div_ceil
-        max_levels = div_ceil(tree.nlevels, 5) * 5
-
-        knl_info = self.get_kernel_info(
-                tree.dimensions, tree.particle_id_dtype, tree.box_id_dtype,
-                tree.coord_dtype, tree.box_level_dtype, max_levels,
-                tree.sources_are_targets,
-                tree.sources_have_extent, tree.targets_have_extent,
-                tree.extent_norm,
-                source_boxes_mask is not None,
-                source_parent_boxes_mask is not None)
-
-        def debug_with_finish(s):
-            if debug:
-                actx.queue.finish()
-
-            logger.debug(s)
-
-        traversal_plog = ProcessLogger(logger, "build traversal")
-
-        # {{{ source boxes, their parents, and target boxes
-
-        debug_with_finish(
-            "building list of source boxes, their parents, and target boxes")
-
-        extra_args = []
-        if source_boxes_mask is not None:
-            extra_args.append(source_boxes_mask)
-        if source_parent_boxes_mask is not None:
-            extra_args.append(source_parent_boxes_mask)
-
-        result, evt = knl_info.sources_parents_and_targets_builder(
-            actx.queue, tree.nboxes, tree.box_flags, *extra_args, wait_for=wait_for
-        )
-
-        wait_for = [evt]
-
-        source_parent_boxes = result["source_parent_boxes"].lists
-        source_boxes = result["source_boxes"].lists
-        target_or_target_parent_boxes = result["target_or_target_parent_boxes"].lists
-
-        if not tree.sources_are_targets:
-            target_boxes = result["target_boxes"].lists
-        else:
-            target_boxes = source_boxes
-
-        # }}}
-
-        # {{{ figure out level starts in *_parent_boxes
-
-        def extract_level_start_box_nrs(box_list, wait_for):
-            result = actx.empty(
-                tree.nlevels + 1, tree.box_id_dtype).fill(len(box_list))
-
-            evt = knl_info.level_start_box_nrs_extractor(
-                    tree.level_start_box_nrs,
-                    tree.box_levels,
-                    box_list,
-                    result,
-                    range=slice(0, len(box_list)),
-                    queue=actx.queue, wait_for=wait_for)
-
-            result = actx.to_numpy(result)
-
-            # Postprocess result for unoccupied levels
-            prev_start = len(box_list)
-            for ilev in range(tree.nlevels-1, -1, -1):
-                result[ilev] = prev_start = \
-                        min(result[ilev], prev_start)
-
-            return result, evt
-
-        debug_with_finish("finding level starts in source boxes array")
-        level_start_source_box_nrs, evt_s = \
-                extract_level_start_box_nrs(
-                        source_boxes, wait_for=wait_for)
-
-        debug_with_finish("finding level starts in source parent boxes array")
-        level_start_source_parent_box_nrs, evt_sp = \
-                extract_level_start_box_nrs(
-                        source_parent_boxes, wait_for=wait_for)
-
-        debug_with_finish("finding level starts in target boxes array")
-        level_start_target_box_nrs, evt_t = \
-                extract_level_start_box_nrs(
-                        target_boxes, wait_for=wait_for)
-
-        debug_with_finish(
-            "finding level starts in target or target parent boxes array")
-        level_start_target_or_target_parent_box_nrs, evt_tp = \
-                extract_level_start_box_nrs(
-                        target_or_target_parent_boxes, wait_for=wait_for)
-
-        wait_for = [evt_s, evt_sp, evt_t, evt_tp]
-
-        # }}}
-
-        # {{{ same-level non-well-separated boxes
-
-        # If well_sep_is_n_away is 1, this agrees with the definition of
-        # 'colleagues' from the classical FMM literature.
-
-        debug_with_finish("finding same-level near-field boxes")
-
-        result, evt = knl_info.same_level_non_well_sep_boxes_builder(
-                actx.queue, tree.nboxes,
-                tree.box_centers.data, tree.root_extent, tree.box_levels,
-                tree.aligned_nboxes, tree.box_child_ids.data, tree.box_flags,
-                wait_for=wait_for)
-        wait_for = [evt]
-        same_level_non_well_sep_boxes = result["same_level_non_well_sep_boxes"]
-
-        # }}}
-
-        # {{{ neighbor source boxes ("list 1")
-
-        debug_with_finish("finding neighbor source boxes ('list 1')")
-
-        result, evt = knl_info.neighbor_source_boxes_builder(
-                actx.queue, len(target_boxes),
-                tree.box_centers.data, tree.root_extent, tree.box_levels,
-                tree.aligned_nboxes, tree.box_child_ids.data, tree.box_flags,
-                target_boxes, wait_for=wait_for)
-
-        wait_for = [evt]
-        neighbor_source_boxes = result["neighbor_source_boxes"]
-
-        # }}}
-
-        # {{{ well-separated siblings ("list 2")
-
-        debug_with_finish("finding well-separated siblings ('list 2')")
-
-        result, evt = knl_info.from_sep_siblings_builder(
-                actx.queue, len(target_or_target_parent_boxes),
-                tree.box_centers.data, tree.root_extent, tree.box_levels,
-                tree.aligned_nboxes, tree.box_child_ids.data, tree.box_flags,
-                target_or_target_parent_boxes, tree.box_parent_ids.data,
-                same_level_non_well_sep_boxes.starts,
-                same_level_non_well_sep_boxes.lists,
-                wait_for=wait_for)
-        wait_for = [evt]
-        from_sep_siblings = result["from_sep_siblings"]
-
-        # }}}
-
-        with_extent = tree.sources_have_extent or tree.targets_have_extent
-
-        # {{{ separated smaller ("list 3")
-
-        debug_with_finish("finding separated smaller ('list 3')")
-
-        from_sep_smaller_base_args = (
-                actx.queue, len(target_boxes),
-                tree.box_centers.data, tree.root_extent, tree.box_levels,
-                tree.aligned_nboxes, tree.box_child_ids.data, tree.box_flags,
-                tree.stick_out_factor, target_boxes,
-                same_level_non_well_sep_boxes.starts,
-                same_level_non_well_sep_boxes.lists,
-                tree.box_target_bounding_box_min.data,
-                tree.box_target_bounding_box_max.data,
-                tree.box_source_counts_cumul,
-                _from_sep_smaller_min_nsources_cumul,
-                )
-
-        from_sep_smaller_wait_for = []
-        from_sep_smaller_by_level = []
-        target_boxes_sep_smaller_by_source_level = []
-
-        for ilevel in range(tree.nlevels):
-            debug_with_finish(f"finding separated smaller ('list 3 level {ilevel}')")
-
-            result, evt = knl_info.from_sep_smaller_builder(
-                    *(from_sep_smaller_base_args + (ilevel,)),
-                    omit_lists=("from_sep_close_smaller",) if with_extent else (),
-                    wait_for=wait_for)
-
-            target_boxes_sep_smaller = target_boxes[
-                result["from_sep_smaller"].nonempty_indices]
-
-            from_sep_smaller_by_level.append(result["from_sep_smaller"])
-            target_boxes_sep_smaller_by_source_level.append(target_boxes_sep_smaller)
-            from_sep_smaller_wait_for.append(evt)
-
-        if with_extent:
-            debug_with_finish("finding separated smaller close ('list 3 close')")
-            result, evt = knl_info.from_sep_smaller_builder(
-                    *(from_sep_smaller_base_args + (-1,)),
-                    omit_lists=("from_sep_smaller",),
-                    wait_for=wait_for)
-            from_sep_close_smaller_starts = result["from_sep_close_smaller"].starts
-            from_sep_close_smaller_lists = result["from_sep_close_smaller"].lists
-
-            from_sep_smaller_wait_for.append(evt)
-        else:
-            from_sep_close_smaller_starts = None
-            from_sep_close_smaller_lists = None
-
-        # }}}
-
-        wait_for = from_sep_smaller_wait_for
-        del from_sep_smaller_wait_for
-
-        # {{{ separated bigger ("list 4")
-
-        debug_with_finish("finding separated bigger ('list 4')")
-
-        result, evt = knl_info.from_sep_bigger_builder(
-                actx.queue, len(target_or_target_parent_boxes),
-                tree.box_centers.data, tree.root_extent, tree.box_levels,
-                tree.aligned_nboxes, tree.box_child_ids.data, tree.box_flags,
-                tree.stick_out_factor, target_or_target_parent_boxes,
-                tree.box_parent_ids.data,
-                same_level_non_well_sep_boxes.starts,
-                same_level_non_well_sep_boxes.lists,
-                wait_for=wait_for)
-
-        wait_for = [evt]
-        from_sep_bigger = result["from_sep_bigger"]
-
-        if with_extent:
-            # These are indexed by target_or_target_parent boxes; we rewrite
-            # them to be indexed by target_boxes.
-            from_sep_close_bigger_starts_raw = result["from_sep_close_bigger"].starts
-            from_sep_close_bigger_lists_raw = result["from_sep_close_bigger"].lists
-
-            result = merge_lists(
-                    actx,
-                    # starts
-                    (from_sep_close_bigger_starts_raw,),
-                    # lists
-                    (from_sep_close_bigger_lists_raw,),
-                    # input index style
-                    _IndexStyle.TARGET_OR_TARGET_PARENT_BOXES,
-                    # output index style
-                    _IndexStyle.TARGET_BOXES,
-                    # box and tree data
-                    target_boxes,
-                    target_or_target_parent_boxes,
-                    tree.nboxes,
-                    tree.box_id_dtype,
-                    debug,
-                    )
-
-            del from_sep_close_bigger_starts_raw
-            del from_sep_close_bigger_lists_raw
-
-            from_sep_close_bigger_starts = result["starts"]
-            from_sep_close_bigger_lists = result["lists"]
-        else:
-            from_sep_close_bigger_starts = None
-            from_sep_close_bigger_lists = None
-
-        # }}}
-
-        evt, = wait_for
-        traversal_plog.done(
-                "from_sep_smaller_crit: %s",
-                self.from_sep_smaller_crit)
-
-        info = FMMTraversalInfo(
-                tree=tree,
-                well_sep_is_n_away=self.well_sep_is_n_away,
-
-                source_boxes=source_boxes,
-                target_boxes=target_boxes,
-
-                level_start_source_box_nrs=actx.from_numpy(
-                    level_start_source_box_nrs),
-                level_start_target_box_nrs=actx.from_numpy(
-                    level_start_target_box_nrs),
-
-                source_parent_boxes=source_parent_boxes,
-                level_start_source_parent_box_nrs=actx.from_numpy(
-                    level_start_source_parent_box_nrs),
-
-                target_or_target_parent_boxes=target_or_target_parent_boxes,
-                level_start_target_or_target_parent_box_nrs=actx.from_numpy(
-                    level_start_target_or_target_parent_box_nrs),
-
-                same_level_non_well_sep_boxes_starts=(
-                    same_level_non_well_sep_boxes.starts),
-                same_level_non_well_sep_boxes_lists=(
-                    same_level_non_well_sep_boxes.lists),
-
-                neighbor_source_boxes_starts=neighbor_source_boxes.starts,
-                neighbor_source_boxes_lists=neighbor_source_boxes.lists,
-
-                from_sep_siblings_starts=from_sep_siblings.starts,
-                from_sep_siblings_lists=from_sep_siblings.lists,
-
-                from_sep_smaller_by_level=make_obj_array(
-                    from_sep_smaller_by_level),
-                target_boxes_sep_smaller_by_source_level=make_obj_array(
-                    target_boxes_sep_smaller_by_source_level),
-
-                from_sep_close_smaller_starts=from_sep_close_smaller_starts,
-                from_sep_close_smaller_lists=from_sep_close_smaller_lists,
-
-                from_sep_bigger_starts=from_sep_bigger.starts,
-                from_sep_bigger_lists=from_sep_bigger.lists,
-
-                from_sep_close_bigger_starts=from_sep_close_bigger_starts,
-                from_sep_close_bigger_lists=from_sep_close_bigger_lists,
-                )
-
-        return actx.freeze(info), evt
+        from warnings import warn
+        warn(f"'{type(self).__name__}' is deprecated and will be removed in 2023. "
+            "Use 'build_traversal' instead.",
+            DeprecationWarning, stacklevel=2)
+
+        return build_traversal(actx, tree,
+            well_sep_is_n_away=self.well_sep_is_n_away,
+            from_sep_smaller_crit=self.from_sep_smaller_crit,
+            source_boxes_mask=source_boxes_mask,
+            source_parent_boxes_mask=source_parent_boxes_mask,
+            _from_sep_smaller_min_nsources_cumul=(
+                _from_sep_smaller_min_nsources_cumul),
+            debug=debug,
+            )
+
+
+# {{{ traversal kernels
+
+@log_process(logger)
+@memoize_on_first_arg
+def get_traversal_kernel_info(
+        actx: PyOpenCLArrayContext, *,
+        dimensions: int,
+        particle_id_dtype: "np.dtype",
+        box_id_dtype: "np.dtype",
+        coord_dtype: "np.dtype",
+        box_level_dtype: "np.dtype",
+        max_levels: int,
+        sources_are_targets: bool,
+        sources_have_extent: bool,
+        targets_have_extent: bool,
+        extent_norm: str,
+        source_boxes_has_mask: bool,
+        source_parent_boxes_has_mask: bool,
+        well_sep_is_n_away: int,
+        from_sep_smaller_crit: str,
+        debug: bool = False) -> TraversalKernelInfo:
+    # {{{ process from_sep_smaller_crit
+
+    if extent_norm == "linf":
+        # no special checks needed
+        pass
+
+    elif extent_norm == "l2":
+        if from_sep_smaller_crit == "static_linf":
+            # Not technically necessary, but static linf will assume box
+            # bounds that are not guaranteed to contain all particle
+            # extents.
+            raise ValueError(
+                    "The static l^inf from-sep-smaller criterion "
+                    "cannot be used with the l^2 extent norm")
+
+    elif extent_norm is None:
+        assert not (sources_have_extent or targets_have_extent)
+
+        if from_sep_smaller_crit is None:
+            # doesn't matter
+            from_sep_smaller_crit = "static_linf"
+
+    else:
+        raise ValueError("unexpected value of 'extent_norm': %s"
+                % extent_norm)
+
+    if from_sep_smaller_crit not in [
+            "static_linf", "precise_linf",
+            "static_l2",
+            ]:
+        raise ValueError("unexpected value of 'from_sep_smaller_crit': %s"
+                % from_sep_smaller_crit)
 
     # }}}
+
+    from pyopencl.tools import dtype_to_ctype
+
+    from boxtree.tree import box_flags_enum
+    from boxtree.tools import AXIS_NAMES
+
+    render_vars = dict(
+            np=np,
+            dimensions=dimensions,
+            dtype_to_ctype=dtype_to_ctype,
+            particle_id_dtype=particle_id_dtype,
+            box_id_dtype=box_id_dtype,
+            box_flags_enum=box_flags_enum,
+            coord_dtype=coord_dtype,
+            get_coord_vec_dtype=get_coord_vec_dtype,
+            cvec_sub=partial(coord_vec_subscript_code, dimensions),
+            max_levels=max_levels,
+            AXIS_NAMES=AXIS_NAMES,
+            debug=debug,
+            sources_are_targets=sources_are_targets,
+            sources_have_extent=sources_have_extent,
+            targets_have_extent=targets_have_extent,
+            well_sep_is_n_away=well_sep_is_n_away,
+            from_sep_smaller_crit=from_sep_smaller_crit,
+            source_boxes_has_mask=source_boxes_has_mask,
+            source_parent_boxes_has_mask=source_parent_boxes_has_mask
+            )
+    from pyopencl.algorithm import ListOfListsBuilder
+    from boxtree.tools import VectorArg, ScalarArg
+
+    result = {}
+
+    # {{{ source boxes, their parents, target boxes
+
+    src = Template(
+            TRAVERSAL_PREAMBLE_TEMPLATE
+            + SOURCES_PARENTS_AND_TARGETS_TEMPLATE,
+            strict_undefined=True).render(**render_vars)
+
+    arg_decls = [VectorArg(box_flags_enum.dtype, "box_flags")]
+    if source_boxes_has_mask:
+        arg_decls.append(VectorArg(np.int8, "source_boxes_mask"))
+    if source_parent_boxes_has_mask:
+        arg_decls.append(VectorArg(np.int8, "source_parent_boxes_mask"))
+
+    result["sources_parents_and_targets_builder"] = \
+            ListOfListsBuilder(actx.context,
+                    [
+                        ("source_parent_boxes", box_id_dtype),
+                        ("source_boxes", box_id_dtype),
+                        ("target_or_target_parent_boxes", box_id_dtype)
+                        ] + (
+                            [("target_boxes", box_id_dtype)]
+                            if not sources_are_targets
+                            else []),
+                    str(src),
+                    arg_decls=arg_decls,
+                    debug=debug,
+                    name_prefix="sources_parents_and_targets")
+
+    result["level_start_box_nrs_extractor"] = \
+            LEVEL_START_BOX_NR_EXTRACTOR_TEMPLATE.build(actx.context,
+                type_aliases=(
+                    ("box_id_t", box_id_dtype),
+                    ("box_level_t", box_level_dtype),
+                    ),
+                )
+
+    # }}}
+
+    # {{{ build list N builders
+
+    base_args = [
+            VectorArg(coord_dtype, "box_centers", with_offset=False),
+            ScalarArg(coord_dtype, "root_extent"),
+            VectorArg(np.uint8, "box_levels"),
+            ScalarArg(box_id_dtype, "aligned_nboxes"),
+            VectorArg(box_id_dtype, "box_child_ids", with_offset=False),
+            VectorArg(box_flags_enum.dtype, "box_flags"),
+            ]
+
+    for list_name, template, extra_args, extra_lists, eliminate_empty_list in [
+            ("same_level_non_well_sep_boxes",
+                SAME_LEVEL_NON_WELL_SEP_BOXES_TEMPLATE, [], [], []),
+            ("neighbor_source_boxes", NEIGBHOR_SOURCE_BOXES_TEMPLATE,
+                    [
+                        VectorArg(box_id_dtype, "target_boxes"),
+                        ], [], []),
+            ("from_sep_siblings", FROM_SEP_SIBLINGS_TEMPLATE,
+                    [
+                        VectorArg(box_id_dtype, "target_or_target_parent_boxes"),
+                        VectorArg(box_id_dtype, "box_parent_ids",
+                            with_offset=False),
+                        VectorArg(box_id_dtype,
+                            "same_level_non_well_sep_boxes_starts"),
+                        VectorArg(box_id_dtype,
+                            "same_level_non_well_sep_boxes_lists"),
+                        ], [], []),
+            ("from_sep_smaller", FROM_SEP_SMALLER_TEMPLATE,
+                    [
+                        ScalarArg(coord_dtype, "stick_out_factor"),
+                        VectorArg(box_id_dtype, "target_boxes"),
+                        VectorArg(box_id_dtype,
+                            "same_level_non_well_sep_boxes_starts"),
+                        VectorArg(box_id_dtype,
+                            "same_level_non_well_sep_boxes_lists"),
+                        VectorArg(coord_dtype, "box_target_bounding_box_min",
+                            with_offset=False),
+                        VectorArg(coord_dtype, "box_target_bounding_box_max",
+                            with_offset=False),
+                        VectorArg(particle_id_dtype, "box_source_counts_cumul"),
+                        ScalarArg(particle_id_dtype,
+                            "from_sep_smaller_min_nsources_cumul"),
+                        ScalarArg(box_id_dtype, "from_sep_smaller_source_level"),
+                        ],
+                        ["from_sep_close_smaller"]
+                        if sources_have_extent or targets_have_extent
+                        else [], ["from_sep_smaller"]),
+            ("from_sep_bigger", FROM_SEP_BIGGER_TEMPLATE,
+                    [
+                        ScalarArg(coord_dtype, "stick_out_factor"),
+                        VectorArg(box_id_dtype, "target_or_target_parent_boxes"),
+                        VectorArg(box_id_dtype, "box_parent_ids",
+                            with_offset=False),
+                        VectorArg(box_id_dtype,
+                            "same_level_non_well_sep_boxes_starts"),
+                        VectorArg(box_id_dtype,
+                            "same_level_non_well_sep_boxes_lists"),
+                        ],
+                        ["from_sep_close_bigger"]
+                        if sources_have_extent or targets_have_extent
+                        else [], []),
+            ]:
+        src = Template(
+                TRAVERSAL_PREAMBLE_TEMPLATE
+                + HELPER_FUNCTION_TEMPLATE
+                + template,
+                strict_undefined=True).render(**render_vars)
+
+        result[f"{list_name}_builder"] = ListOfListsBuilder(actx.context,
+                [(list_name, box_id_dtype)]
+                + [(extra_list_name, box_id_dtype)
+                    for extra_list_name in extra_lists],
+                str(src),
+                arg_decls=base_args + extra_args,
+                debug=debug, name_prefix=list_name,
+                complex_kernel=True,
+                eliminate_empty_output_lists=eliminate_empty_list)
+
+    # }}}
+
+    return TraversalKernelInfo(**result)
+
+# }}}
+
+
+# {{{ driver
+
+def build_traversal(
+        actx: PyOpenCLArrayContext, tree: Tree, *,
+        well_sep_is_n_away: int = 1,
+        from_sep_smaller_crit: Optional[str] = None,
+        source_boxes_mask: Optional["np.ndarray"] = None,
+        source_parent_boxes_mask: Optional["np.ndarray"] = None,
+        _from_sep_smaller_min_nsources_cumul=None,
+        debug: bool = False) -> FMMTraversalInfo:
+    """
+    :arg source_boxes_mask: Only boxes passing this mask will be considered for
+        `source_boxes`. Used by the distributed implementation.
+    :arg source_parent_boxes_mask: Only boxes passing this mask will be
+        considered for `source_parent_boxes`. Used by the distributed
+        implementation.
+    :return: A :class:`tuple` *(trav, event)*, where *trav* is a new instance of
+        :class:`FMMTraversalInfo` and *event* is a :class:`pyopencl.Event`
+        for dependency management.
+    """
+    if from_sep_smaller_crit is None:
+        from_sep_smaller_crit = "precise_linf"
+
+    if _from_sep_smaller_min_nsources_cumul is None:
+        # default to old no-threshold behavior
+        _from_sep_smaller_min_nsources_cumul = 0
+
+    if not tree._is_pruned:
+        raise ValueError("tree must be pruned for traversal generation")
+
+    if tree.sources_have_extent:
+        # YAGNI
+        raise NotImplementedError(
+                "trees with source extent are not supported for "
+                "traversal generation")
+
+    # Generated code shouldn't depend on the *exact* number of tree levels.
+    # So round up to the next multiple of 5.
+    from pytools import div_ceil
+    max_levels = div_ceil(tree.nlevels, 5) * 5
+
+    knl = get_traversal_kernel_info(
+            actx,
+            dimensions=tree.dimensions,
+            particle_id_dtype=tree.particle_id_dtype,
+            box_id_dtype=tree.box_id_dtype,
+            coord_dtype=tree.coord_dtype,
+            box_level_dtype=tree.box_level_dtype,
+            max_levels=max_levels,
+            sources_are_targets=tree.sources_are_targets,
+            sources_have_extent=tree.sources_have_extent,
+            targets_have_extent=tree.targets_have_extent,
+            extent_norm=tree.extent_norm,
+            source_boxes_has_mask=source_boxes_mask is not None,
+            source_parent_boxes_has_mask=source_parent_boxes_mask is not None,
+            well_sep_is_n_away=well_sep_is_n_away,
+            from_sep_smaller_crit=from_sep_smaller_crit,
+            debug=debug,
+            )
+
+    def debug_with_finish(s):
+        if debug:
+            actx.queue.finish()
+
+        logger.debug(s)
+
+    traversal_plog = ProcessLogger(logger, "build traversal")
+
+    # {{{ source boxes, their parents, and target boxes
+
+    debug_with_finish(
+        "building list of source boxes, their parents, and target boxes")
+
+    extra_args = []
+    if source_boxes_mask is not None:
+        extra_args.append(source_boxes_mask)
+    if source_parent_boxes_mask is not None:
+        extra_args.append(source_parent_boxes_mask)
+
+    result, evt = knl.sources_parents_and_targets_builder(
+        actx.queue, tree.nboxes, tree.box_flags, *extra_args
+    )
+
+    wait_for = [evt]
+
+    source_parent_boxes = result["source_parent_boxes"].lists
+    source_boxes = result["source_boxes"].lists
+    target_or_target_parent_boxes = result["target_or_target_parent_boxes"].lists
+
+    if not tree.sources_are_targets:
+        target_boxes = result["target_boxes"].lists
+    else:
+        target_boxes = source_boxes
+
+    # }}}
+
+    # {{{ figure out level starts in *_parent_boxes
+
+    def extract_level_start_box_nrs(box_list, wait_for):
+        result = actx.empty(
+            tree.nlevels + 1, tree.box_id_dtype).fill(len(box_list))
+
+        evt = knl.level_start_box_nrs_extractor(
+                tree.level_start_box_nrs,
+                tree.box_levels,
+                box_list,
+                result,
+                range=slice(0, len(box_list)),
+                queue=actx.queue, wait_for=wait_for)
+
+        result = actx.to_numpy(result)
+
+        # Postprocess result for unoccupied levels
+        prev_start = len(box_list)
+        for ilev in range(tree.nlevels-1, -1, -1):
+            result[ilev] = prev_start = \
+                    min(result[ilev], prev_start)
+
+        return result, evt
+
+    debug_with_finish("finding level starts in source boxes array")
+    level_start_source_box_nrs, evt_s = \
+            extract_level_start_box_nrs(
+                    source_boxes, wait_for=wait_for)
+
+    debug_with_finish("finding level starts in source parent boxes array")
+    level_start_source_parent_box_nrs, evt_sp = \
+            extract_level_start_box_nrs(
+                    source_parent_boxes, wait_for=wait_for)
+
+    debug_with_finish("finding level starts in target boxes array")
+    level_start_target_box_nrs, evt_t = \
+            extract_level_start_box_nrs(
+                    target_boxes, wait_for=wait_for)
+
+    debug_with_finish(
+        "finding level starts in target or target parent boxes array")
+    level_start_target_or_target_parent_box_nrs, evt_tp = \
+            extract_level_start_box_nrs(
+                    target_or_target_parent_boxes, wait_for=wait_for)
+
+    wait_for = [evt_s, evt_sp, evt_t, evt_tp]
+
+    # }}}
+
+    # {{{ same-level non-well-separated boxes
+
+    # If well_sep_is_n_away is 1, this agrees with the definition of
+    # 'colleagues' from the classical FMM literature.
+
+    debug_with_finish("finding same-level near-field boxes")
+
+    result, evt = knl.same_level_non_well_sep_boxes_builder(
+            actx.queue, tree.nboxes,
+            tree.box_centers.data, tree.root_extent, tree.box_levels,
+            tree.aligned_nboxes, tree.box_child_ids.data, tree.box_flags,
+            wait_for=wait_for)
+    wait_for = [evt]
+    same_level_non_well_sep_boxes = result["same_level_non_well_sep_boxes"]
+
+    # }}}
+
+    # {{{ neighbor source boxes ("list 1")
+
+    debug_with_finish("finding neighbor source boxes ('list 1')")
+
+    result, evt = knl.neighbor_source_boxes_builder(
+            actx.queue, len(target_boxes),
+            tree.box_centers.data, tree.root_extent, tree.box_levels,
+            tree.aligned_nboxes, tree.box_child_ids.data, tree.box_flags,
+            target_boxes, wait_for=wait_for)
+
+    wait_for = [evt]
+    neighbor_source_boxes = result["neighbor_source_boxes"]
+
+    # }}}
+
+    # {{{ well-separated siblings ("list 2")
+
+    debug_with_finish("finding well-separated siblings ('list 2')")
+
+    result, evt = knl.from_sep_siblings_builder(
+            actx.queue, len(target_or_target_parent_boxes),
+            tree.box_centers.data, tree.root_extent, tree.box_levels,
+            tree.aligned_nboxes, tree.box_child_ids.data, tree.box_flags,
+            target_or_target_parent_boxes, tree.box_parent_ids.data,
+            same_level_non_well_sep_boxes.starts,
+            same_level_non_well_sep_boxes.lists,
+            wait_for=wait_for)
+    wait_for = [evt]
+    from_sep_siblings = result["from_sep_siblings"]
+
+    # }}}
+
+    with_extent = tree.sources_have_extent or tree.targets_have_extent
+
+    # {{{ separated smaller ("list 3")
+
+    debug_with_finish("finding separated smaller ('list 3')")
+
+    from_sep_smaller_base_args = (
+            actx.queue, len(target_boxes),
+            tree.box_centers.data, tree.root_extent, tree.box_levels,
+            tree.aligned_nboxes, tree.box_child_ids.data, tree.box_flags,
+            tree.stick_out_factor, target_boxes,
+            same_level_non_well_sep_boxes.starts,
+            same_level_non_well_sep_boxes.lists,
+            tree.box_target_bounding_box_min.data,
+            tree.box_target_bounding_box_max.data,
+            tree.box_source_counts_cumul,
+            _from_sep_smaller_min_nsources_cumul,
+            )
+
+    from_sep_smaller_wait_for = []
+    from_sep_smaller_by_level = []
+    target_boxes_sep_smaller_by_source_level = []
+
+    for ilevel in range(tree.nlevels):
+        debug_with_finish(f"finding separated smaller ('list 3 level {ilevel}')")
+
+        result, evt = knl.from_sep_smaller_builder(
+                *(from_sep_smaller_base_args + (ilevel,)),
+                omit_lists=("from_sep_close_smaller",) if with_extent else (),
+                wait_for=wait_for)
+
+        target_boxes_sep_smaller = target_boxes[
+            result["from_sep_smaller"].nonempty_indices]
+
+        from_sep_smaller_by_level.append(result["from_sep_smaller"])
+        target_boxes_sep_smaller_by_source_level.append(target_boxes_sep_smaller)
+        from_sep_smaller_wait_for.append(evt)
+
+    if with_extent:
+        debug_with_finish("finding separated smaller close ('list 3 close')")
+        result, evt = knl.from_sep_smaller_builder(
+                *(from_sep_smaller_base_args + (-1,)),
+                omit_lists=("from_sep_smaller",),
+                wait_for=wait_for)
+        from_sep_close_smaller_starts = result["from_sep_close_smaller"].starts
+        from_sep_close_smaller_lists = result["from_sep_close_smaller"].lists
+
+        from_sep_smaller_wait_for.append(evt)
+    else:
+        from_sep_close_smaller_starts = None
+        from_sep_close_smaller_lists = None
+
+    # }}}
+
+    wait_for = from_sep_smaller_wait_for
+    del from_sep_smaller_wait_for
+
+    # {{{ separated bigger ("list 4")
+
+    debug_with_finish("finding separated bigger ('list 4')")
+
+    result, evt = knl.from_sep_bigger_builder(
+            actx.queue, len(target_or_target_parent_boxes),
+            tree.box_centers.data, tree.root_extent, tree.box_levels,
+            tree.aligned_nboxes, tree.box_child_ids.data, tree.box_flags,
+            tree.stick_out_factor, target_or_target_parent_boxes,
+            tree.box_parent_ids.data,
+            same_level_non_well_sep_boxes.starts,
+            same_level_non_well_sep_boxes.lists,
+            wait_for=wait_for)
+
+    wait_for = [evt]
+    from_sep_bigger = result["from_sep_bigger"]
+
+    if with_extent:
+        # These are indexed by target_or_target_parent boxes; we rewrite
+        # them to be indexed by target_boxes.
+        from_sep_close_bigger_starts_raw = result["from_sep_close_bigger"].starts
+        from_sep_close_bigger_lists_raw = result["from_sep_close_bigger"].lists
+
+        result = merge_lists(
+                actx,
+                # starts
+                (from_sep_close_bigger_starts_raw,),
+                # lists
+                (from_sep_close_bigger_lists_raw,),
+                # input index style
+                _IndexStyle.TARGET_OR_TARGET_PARENT_BOXES,
+                # output index style
+                _IndexStyle.TARGET_BOXES,
+                # box and tree data
+                target_boxes,
+                target_or_target_parent_boxes,
+                tree.nboxes,
+                tree.box_id_dtype,
+                debug,
+                )
+
+        del from_sep_close_bigger_starts_raw
+        del from_sep_close_bigger_lists_raw
+
+        from_sep_close_bigger_starts = result["starts"]
+        from_sep_close_bigger_lists = result["lists"]
+    else:
+        from_sep_close_bigger_starts = None
+        from_sep_close_bigger_lists = None
+
+    # }}}
+
+    evt, = wait_for
+    traversal_plog.done("from_sep_smaller_crit: %s", from_sep_smaller_crit)
+
+    info = FMMTraversalInfo(
+            tree=tree,
+            well_sep_is_n_away=well_sep_is_n_away,
+
+            source_boxes=source_boxes,
+            target_boxes=target_boxes,
+
+            level_start_source_box_nrs=actx.from_numpy(
+                level_start_source_box_nrs),
+            level_start_target_box_nrs=actx.from_numpy(
+                level_start_target_box_nrs),
+
+            source_parent_boxes=source_parent_boxes,
+            level_start_source_parent_box_nrs=actx.from_numpy(
+                level_start_source_parent_box_nrs),
+
+            target_or_target_parent_boxes=target_or_target_parent_boxes,
+            level_start_target_or_target_parent_box_nrs=actx.from_numpy(
+                level_start_target_or_target_parent_box_nrs),
+
+            same_level_non_well_sep_boxes_starts=(
+                same_level_non_well_sep_boxes.starts),
+            same_level_non_well_sep_boxes_lists=(
+                same_level_non_well_sep_boxes.lists),
+
+            neighbor_source_boxes_starts=neighbor_source_boxes.starts,
+            neighbor_source_boxes_lists=neighbor_source_boxes.lists,
+
+            from_sep_siblings_starts=from_sep_siblings.starts,
+            from_sep_siblings_lists=from_sep_siblings.lists,
+
+            from_sep_smaller_by_level=make_obj_array(
+                from_sep_smaller_by_level),
+            target_boxes_sep_smaller_by_source_level=make_obj_array(
+                target_boxes_sep_smaller_by_source_level),
+
+            from_sep_close_smaller_starts=from_sep_close_smaller_starts,
+            from_sep_close_smaller_lists=from_sep_close_smaller_lists,
+
+            from_sep_bigger_starts=from_sep_bigger.starts,
+            from_sep_bigger_lists=from_sep_bigger.lists,
+
+            from_sep_close_bigger_starts=from_sep_close_bigger_starts,
+            from_sep_close_bigger_lists=from_sep_close_bigger_lists,
+            )
+
+    return actx.freeze(info)
+
+# }}}
 
 # vim: fdm=marker

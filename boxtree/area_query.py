@@ -66,7 +66,6 @@ Peer Lists
 Area queries are implemented using peer lists.
 
 .. autoclass:: PeerListLookup
-
 .. autofunction:: build_peer_list
 """
 

@@ -69,7 +69,7 @@ from pyopencl.tools import dtype_to_ctype
 from mako.template import Template
 
 from pymbolic import var, evaluate
-from pytools import memoize_method
+from pytools import memoize_in
 
 from boxtree.array_context import PyOpenCLArrayContext
 
@@ -730,35 +730,40 @@ class FMMCostModel(AbstractFMMCostModel):
 
     # {{{ form multipoles
 
-    @memoize_method
     def process_form_multipoles_knl(self, actx: PyOpenCLArrayContext,
                                     box_id_dtype, particle_id_dtype,
                                     box_level_dtype):
-        return ElementwiseKernel(
-            actx.context,
-            Template(r"""
-                double *np2m,
-                ${box_id_t} *source_boxes,
-                ${particle_id_t} *box_source_counts_nonchild,
-                ${box_level_t} *box_levels,
-                double *p2m_cost
-            """).render(
-                box_id_t=dtype_to_ctype(box_id_dtype),
-                particle_id_t=dtype_to_ctype(particle_id_dtype),
-                box_level_t=dtype_to_ctype(box_level_dtype)
-            ),
-            Template(r"""
-                ${box_id_t} box_idx = source_boxes[i];
-                ${particle_id_t} nsources = box_source_counts_nonchild[box_idx];
-                ${box_level_t} ilevel = box_levels[box_idx];
-                np2m[i] = nsources * p2m_cost[ilevel];
-            """).render(
-                box_id_t=dtype_to_ctype(box_id_dtype),
-                particle_id_t=dtype_to_ctype(particle_id_dtype),
-                box_level_t=dtype_to_ctype(box_level_dtype)
-            ),
-            name="process_form_multipoles"
-        )
+        @memoize_in(actx, (
+            FMMCostModel.process_form_multipoles_knl,
+            box_id_dtype, particle_id_dtype, box_level_dtype))
+        def get_kernel():
+            return ElementwiseKernel(
+                actx.context,
+                Template(r"""
+                    double *np2m,
+                    ${box_id_t} *source_boxes,
+                    ${particle_id_t} *box_source_counts_nonchild,
+                    ${box_level_t} *box_levels,
+                    double *p2m_cost
+                """).render(
+                    box_id_t=dtype_to_ctype(box_id_dtype),
+                    particle_id_t=dtype_to_ctype(particle_id_dtype),
+                    box_level_t=dtype_to_ctype(box_level_dtype)
+                ),
+                Template(r"""
+                    ${box_id_t} box_idx = source_boxes[i];
+                    ${particle_id_t} nsources = box_source_counts_nonchild[box_idx];
+                    ${box_level_t} ilevel = box_levels[box_idx];
+                    np2m[i] = nsources * p2m_cost[ilevel];
+                """).render(
+                    box_id_t=dtype_to_ctype(box_id_dtype),
+                    particle_id_t=dtype_to_ctype(particle_id_dtype),
+                    box_level_t=dtype_to_ctype(box_level_dtype)
+                ),
+                name="process_form_multipoles"
+            )
+
+        return get_kernel()
 
     def process_form_multipoles(self, actx, traversal, p2m_cost):
         tree = traversal.tree
@@ -783,50 +788,55 @@ class FMMCostModel(AbstractFMMCostModel):
 
     # {{{ propagate multipoles upward
 
-    @memoize_method
     def process_coarsen_multipoles_knl(self, actx: PyOpenCLArrayContext,
                                        ndimensions, box_id_dtype,
                                        box_level_dtype, nlevels):
-        return ElementwiseKernel(
-            actx.context,
-            Template(r"""
-                ${box_id_t} *source_parent_boxes,
-                ${box_level_t} *box_levels,
-                double *m2m_cost,
-                double *nm2m,
-                % for i in range(2**ndimensions):
-                    % if i == 2**ndimensions - 1:
-                        ${box_id_t} *box_child_ids_${i}
-                    % else:
-                        ${box_id_t} *box_child_ids_${i},
-                    % endif
-                % endfor
-            """).render(
-                ndimensions=ndimensions,
-                box_id_t=dtype_to_ctype(box_id_dtype),
-                box_level_t=dtype_to_ctype(box_level_dtype)
-            ),
-            Template(r"""
-                ${box_id_t} box_idx = source_parent_boxes[i];
-                ${box_level_t} target_level = box_levels[box_idx];
-                if(target_level <= 1) {
-                    nm2m[i] = 0.0;
-                } else {
-                    int nchild = 0;
+        @memoize_in(actx, (
+            FMMCostModel.process_coarsen_multipoles_knl,
+            ndimensions, box_id_dtype, box_level_dtype, nlevels))
+        def get_kernel():
+            return ElementwiseKernel(
+                actx.context,
+                Template(r"""
+                    ${box_id_t} *source_parent_boxes,
+                    ${box_level_t} *box_levels,
+                    double *m2m_cost,
+                    double *nm2m,
                     % for i in range(2**ndimensions):
-                        if(box_child_ids_${i}[box_idx])
-                            nchild += 1;
+                        % if i == 2**ndimensions - 1:
+                            ${box_id_t} *box_child_ids_${i}
+                        % else:
+                            ${box_id_t} *box_child_ids_${i},
+                        % endif
                     % endfor
-                    nm2m[i] = nchild * m2m_cost[target_level];
-                }
-            """).render(
-                ndimensions=ndimensions,
-                box_id_t=dtype_to_ctype(box_id_dtype),
-                box_level_t=dtype_to_ctype(box_level_dtype),
-                nlevels=nlevels
-            ),
-            name="process_coarsen_multipoles"
-        )
+                """).render(
+                    ndimensions=ndimensions,
+                    box_id_t=dtype_to_ctype(box_id_dtype),
+                    box_level_t=dtype_to_ctype(box_level_dtype)
+                ),
+                Template(r"""
+                    ${box_id_t} box_idx = source_parent_boxes[i];
+                    ${box_level_t} target_level = box_levels[box_idx];
+                    if(target_level <= 1) {
+                        nm2m[i] = 0.0;
+                    } else {
+                        int nchild = 0;
+                        % for i in range(2**ndimensions):
+                            if(box_child_ids_${i}[box_idx])
+                                nchild += 1;
+                        % endfor
+                        nm2m[i] = nchild * m2m_cost[target_level];
+                    }
+                """).render(
+                    ndimensions=ndimensions,
+                    box_id_t=dtype_to_ctype(box_id_dtype),
+                    box_level_t=dtype_to_ctype(box_level_dtype),
+                    nlevels=nlevels
+                ),
+                name="process_coarsen_multipoles"
+            )
+
+        return get_kernel()
 
     def process_coarsen_multipoles(self, actx: PyOpenCLArrayContext,
                                    traversal, m2m_cost):
@@ -853,42 +863,47 @@ class FMMCostModel(AbstractFMMCostModel):
 
     # {{{ direct evaluation to point targets (lists 1, 3 close, 4 close)
 
-    @memoize_method
     def _get_ndirect_sources_knl(self, actx: PyOpenCLArrayContext,
                                  particle_id_dtype, box_id_dtype):
-        return ElementwiseKernel(
-            actx.context,
-            Template("""
-                ${particle_id_t} *ndirect_sources_by_itgt_box,
-                ${box_id_t} *source_boxes_starts,
-                ${box_id_t} *source_boxes_lists,
-                ${particle_id_t} *box_source_counts_nonchild
-            """).render(
-                particle_id_t=dtype_to_ctype(particle_id_dtype),
-                box_id_t=dtype_to_ctype(box_id_dtype)
-            ),
-            Template(r"""
-                ${particle_id_t} nsources = 0;
-                ${box_id_t} source_boxes_start_idx = source_boxes_starts[i];
-                ${box_id_t} source_boxes_end_idx = source_boxes_starts[i + 1];
+        @memoize_in(actx, (
+            FMMCostModel._get_ndirect_sources_knl,
+            particle_id_dtype, box_id_dtype))
+        def get_kernel():
+            return ElementwiseKernel(
+                actx.context,
+                Template("""
+                    ${particle_id_t} *ndirect_sources_by_itgt_box,
+                    ${box_id_t} *source_boxes_starts,
+                    ${box_id_t} *source_boxes_lists,
+                    ${particle_id_t} *box_source_counts_nonchild
+                """).render(
+                    particle_id_t=dtype_to_ctype(particle_id_dtype),
+                    box_id_t=dtype_to_ctype(box_id_dtype)
+                ),
+                Template(r"""
+                    ${particle_id_t} nsources = 0;
+                    ${box_id_t} source_boxes_start_idx = source_boxes_starts[i];
+                    ${box_id_t} source_boxes_end_idx = source_boxes_starts[i + 1];
 
-                for(${box_id_t} cur_source_boxes_idx = source_boxes_start_idx;
-                    cur_source_boxes_idx < source_boxes_end_idx;
-                    cur_source_boxes_idx++)
-                {
-                    ${box_id_t} cur_source_box = source_boxes_lists[
-                        cur_source_boxes_idx
-                    ];
-                    nsources += box_source_counts_nonchild[cur_source_box];
-                }
+                    for(${box_id_t} cur_source_boxes_idx = source_boxes_start_idx;
+                        cur_source_boxes_idx < source_boxes_end_idx;
+                        cur_source_boxes_idx++)
+                    {
+                        ${box_id_t} cur_source_box = source_boxes_lists[
+                            cur_source_boxes_idx
+                        ];
+                        nsources += box_source_counts_nonchild[cur_source_box];
+                    }
 
-                ndirect_sources_by_itgt_box[i] += nsources;
-            """).render(
-                particle_id_t=dtype_to_ctype(particle_id_dtype),
-                box_id_t=dtype_to_ctype(box_id_dtype)
-            ),
-            name="get_ndirect_sources"
-        )
+                    ndirect_sources_by_itgt_box[i] += nsources;
+                """).render(
+                    particle_id_t=dtype_to_ctype(particle_id_dtype),
+                    box_id_t=dtype_to_ctype(box_id_dtype)
+                ),
+                name="get_ndirect_sources"
+            )
+
+        return get_kernel()
 
     def get_ndirect_sources_per_target_box(self, actx: PyOpenCLArrayContext,
                                            traversal):
@@ -950,33 +965,37 @@ class FMMCostModel(AbstractFMMCostModel):
 
     # {{{ translate separated siblings' ("list 2") mpoles to local
 
-    @memoize_method
     def process_list2_knl(self, actx: PyOpenCLArrayContext,
                           box_id_dtype, box_level_dtype):
-        return ElementwiseKernel(
-            actx.context,
-            Template(r"""
-                double *nm2l,
-                ${box_id_t} *target_or_target_parent_boxes,
-                ${box_id_t} *from_sep_siblings_starts,
-                ${box_level_t} *box_levels,
-                double *m2l_cost
-            """).render(
-                box_id_t=dtype_to_ctype(box_id_dtype),
-                box_level_t=dtype_to_ctype(box_level_dtype)
-            ),
-            Template(r"""
-                ${box_id_t} start = from_sep_siblings_starts[i];
-                ${box_id_t} end = from_sep_siblings_starts[i+1];
-                ${box_level_t} ilevel = box_levels[target_or_target_parent_boxes[i]];
+        @memoize_in(actx, (
+            FMMCostModel.process_list2_knl, box_id_dtype, box_level_dtype))
+        def get_kernel():
+            return ElementwiseKernel(
+                actx.context,
+                Template(r"""
+                    double *nm2l,
+                    ${box_id_t} *target_or_target_parent_boxes,
+                    ${box_id_t} *from_sep_siblings_starts,
+                    ${box_level_t} *box_levels,
+                    double *m2l_cost
+                """).render(
+                    box_id_t=dtype_to_ctype(box_id_dtype),
+                    box_level_t=dtype_to_ctype(box_level_dtype)
+                ),
+                Template(r"""
+                    ${box_id_t} start = from_sep_siblings_starts[i];
+                    ${box_id_t} end = from_sep_siblings_starts[i+1];
+                    ${box_level_t} ilevel = box_levels[target_or_target_parent_boxes[i]];
 
-                nm2l[i] = (end - start) * m2l_cost[ilevel];
-            """).render(
-                box_id_t=dtype_to_ctype(box_id_dtype),
-                box_level_t=dtype_to_ctype(box_level_dtype)
-            ),
-            name="process_list2"
-        )
+                    nm2l[i] = (end - start) * m2l_cost[ilevel];
+                """).render(    # noqa: E501
+                    box_id_t=dtype_to_ctype(box_id_dtype),
+                    box_level_t=dtype_to_ctype(box_level_dtype)
+                ),
+                name="process_list2"
+            )
+
+        return get_kernel()
 
     def process_list2(self, actx, traversal, m2l_cost):
         tree = traversal.tree
@@ -1004,35 +1023,40 @@ class FMMCostModel(AbstractFMMCostModel):
 
     # {{{ evaluate sep. smaller mpoles ("list 3") at particles
 
-    @memoize_method
     def process_list3_knl(self, actx: PyOpenCLArrayContext,
                           box_id_dtype, particle_id_dtype):
-        return ElementwiseKernel(
-            actx.context,
-            Template(r"""
-                ${box_id_t} *target_boxes_sep_smaller,
-                ${box_id_t} *sep_smaller_start,
-                ${particle_id_t} *box_target_counts_nonchild,
-                double m2p_cost_current_level,
-                double *nm2p
-            """).render(
-                box_id_t=dtype_to_ctype(box_id_dtype),
-                particle_id_t=dtype_to_ctype(particle_id_dtype)
-            ),
-            Template(r"""
-                ${box_id_t} target_box = target_boxes_sep_smaller[i];
-                ${box_id_t} start = sep_smaller_start[i];
-                ${box_id_t} end = sep_smaller_start[i+1];
-                ${particle_id_t} ntargets = box_target_counts_nonchild[target_box];
-                nm2p[target_box] += (
-                    ntargets * (end - start) * m2p_cost_current_level
-                );
-            """).render(
-                box_id_t=dtype_to_ctype(box_id_dtype),
-                particle_id_t=dtype_to_ctype(particle_id_dtype)
-            ),
-            name="process_list3"
-        )
+        @memoize_in(actx, (
+            FMMCostModel.process_list3_knl,
+            box_id_dtype, particle_id_dtype))
+        def get_kernel():
+            return ElementwiseKernel(
+                actx.context,
+                Template(r"""
+                    ${box_id_t} *target_boxes_sep_smaller,
+                    ${box_id_t} *sep_smaller_start,
+                    ${particle_id_t} *box_target_counts_nonchild,
+                    double m2p_cost_current_level,
+                    double *nm2p
+                """).render(
+                    box_id_t=dtype_to_ctype(box_id_dtype),
+                    particle_id_t=dtype_to_ctype(particle_id_dtype)
+                ),
+                Template(r"""
+                    ${box_id_t} target_box = target_boxes_sep_smaller[i];
+                    ${box_id_t} start = sep_smaller_start[i];
+                    ${box_id_t} end = sep_smaller_start[i+1];
+                    ${particle_id_t} ntargets = box_target_counts_nonchild[target_box];
+                    nm2p[target_box] += (
+                        ntargets * (end - start) * m2p_cost_current_level
+                    );
+                """).render(    # noqa: E501
+                    box_id_t=dtype_to_ctype(box_id_dtype),
+                    particle_id_t=dtype_to_ctype(particle_id_dtype)
+                ),
+                name="process_list3"
+            )
+
+        return get_kernel()
 
     def process_list3(self, actx: PyOpenCLArrayContext, traversal, m2p_cost,
                       box_target_counts_nonchild=None):
@@ -1063,39 +1087,44 @@ class FMMCostModel(AbstractFMMCostModel):
 
     # {{{ form locals for separated bigger source boxes ("list 4")
 
-    @memoize_method
     def process_list4_knl(self, actx: PyOpenCLArrayContext,
                           box_id_dtype, particle_id_dtype, box_level_dtype):
-        return ElementwiseKernel(
-            actx.context,
-            Template(r"""
-                double *nm2p,
-                ${box_id_t} *from_sep_bigger_starts,
-                ${box_id_t} *from_sep_bigger_lists,
-                ${particle_id_t} *box_source_counts_nonchild,
-                ${box_level_t} *box_levels,
-                double *p2l_cost
-            """).render(
-                box_id_t=dtype_to_ctype(box_id_dtype),
-                particle_id_t=dtype_to_ctype(particle_id_dtype),
-                box_level_t=dtype_to_ctype(box_level_dtype)
-            ),
-            Template(r"""
-                ${box_id_t} start = from_sep_bigger_starts[i];
-                ${box_id_t} end = from_sep_bigger_starts[i+1];
-                for(${box_id_t} idx=start; idx < end; idx++) {
-                    ${box_id_t} src_ibox = from_sep_bigger_lists[idx];
-                    ${particle_id_t} nsources = box_source_counts_nonchild[src_ibox];
-                    ${box_level_t} ilevel = box_levels[src_ibox];
-                    nm2p[i] += nsources * p2l_cost[ilevel];
-                }
-            """).render(
-                box_id_t=dtype_to_ctype(box_id_dtype),
-                particle_id_t=dtype_to_ctype(particle_id_dtype),
-                box_level_t=dtype_to_ctype(box_level_dtype)
-            ),
-            name="process_list4"
-        )
+        @memoize_in(actx, (
+            FMMCostModel.process_list4_knl,
+            box_id_dtype, particle_id_dtype, box_level_dtype))
+        def get_kernel():
+            return ElementwiseKernel(
+                actx.context,
+                Template(r"""
+                    double *nm2p,
+                    ${box_id_t} *from_sep_bigger_starts,
+                    ${box_id_t} *from_sep_bigger_lists,
+                    ${particle_id_t} *box_source_counts_nonchild,
+                    ${box_level_t} *box_levels,
+                    double *p2l_cost
+                """).render(
+                    box_id_t=dtype_to_ctype(box_id_dtype),
+                    particle_id_t=dtype_to_ctype(particle_id_dtype),
+                    box_level_t=dtype_to_ctype(box_level_dtype)
+                ),
+                Template(r"""
+                    ${box_id_t} start = from_sep_bigger_starts[i];
+                    ${box_id_t} end = from_sep_bigger_starts[i+1];
+                    for(${box_id_t} idx=start; idx < end; idx++) {
+                        ${box_id_t} src_ibox = from_sep_bigger_lists[idx];
+                        ${particle_id_t} nsources = box_source_counts_nonchild[src_ibox];
+                        ${box_level_t} ilevel = box_levels[src_ibox];
+                        nm2p[i] += nsources * p2l_cost[ilevel];
+                    }
+                """).render(    # noqa: E501
+                    box_id_t=dtype_to_ctype(box_id_dtype),
+                    particle_id_t=dtype_to_ctype(particle_id_dtype),
+                    box_level_t=dtype_to_ctype(box_level_dtype)
+                ),
+                name="process_list4"
+            )
+
+        return get_kernel()
 
     def process_list4(self, actx, traversal, p2l_cost):
         tree = traversal.tree
@@ -1123,34 +1152,40 @@ class FMMCostModel(AbstractFMMCostModel):
 
     # {{{ evaluate local expansions at targets
 
-    @memoize_method
     def process_eval_locals_knl(self, actx: PyOpenCLArrayContext,
                                 box_id_dtype, particle_id_dtype, box_level_dtype):
-        return ElementwiseKernel(
-            actx.context,
-            Template(r"""
-                double *neval_locals,
-                ${box_id_t} *target_boxes,
-                ${particle_id_t} *box_target_counts_nonchild,
-                ${box_level_t} *box_levels,
-                double *l2p_cost
-            """).render(
-                box_id_t=dtype_to_ctype(box_id_dtype),
-                particle_id_t=dtype_to_ctype(particle_id_dtype),
-                box_level_t=dtype_to_ctype(box_level_dtype)
-            ),
-            Template(r"""
-                ${box_id_t} box_idx = target_boxes[i];
-                ${particle_id_t} ntargets = box_target_counts_nonchild[box_idx];
-                ${box_level_t} ilevel = box_levels[box_idx];
-                neval_locals[i] = ntargets * l2p_cost[ilevel];
-            """).render(
-                box_id_t=dtype_to_ctype(box_id_dtype),
-                particle_id_t=dtype_to_ctype(particle_id_dtype),
-                box_level_t=dtype_to_ctype(box_level_dtype)
-            ),
-            name="process_eval_locals"
-        )
+
+        @memoize_in(actx, (
+            FMMCostModel.process_eval_locals_knl,
+            box_id_dtype, particle_id_dtype, box_level_dtype))
+        def get_kernel():
+            return ElementwiseKernel(
+                actx.context,
+                Template(r"""
+                    double *neval_locals,
+                    ${box_id_t} *target_boxes,
+                    ${particle_id_t} *box_target_counts_nonchild,
+                    ${box_level_t} *box_levels,
+                    double *l2p_cost
+                """).render(
+                    box_id_t=dtype_to_ctype(box_id_dtype),
+                    particle_id_t=dtype_to_ctype(particle_id_dtype),
+                    box_level_t=dtype_to_ctype(box_level_dtype)
+                ),
+                Template(r"""
+                    ${box_id_t} box_idx = target_boxes[i];
+                    ${particle_id_t} ntargets = box_target_counts_nonchild[box_idx];
+                    ${box_level_t} ilevel = box_levels[box_idx];
+                    neval_locals[i] = ntargets * l2p_cost[ilevel];
+                """).render(
+                    box_id_t=dtype_to_ctype(box_id_dtype),
+                    particle_id_t=dtype_to_ctype(particle_id_dtype),
+                    box_level_t=dtype_to_ctype(box_level_dtype)
+                ),
+                name="process_eval_locals"
+            )
+
+        return get_kernel()
 
     def process_eval_locals(self, actx: PyOpenCLArrayContext, traversal, l2p_cost,
                             box_target_counts_nonchild=None):
@@ -1179,27 +1214,31 @@ class FMMCostModel(AbstractFMMCostModel):
 
     # {{{ propagate locals downward
 
-    @memoize_method
     def process_refine_locals_knl(self, actx: PyOpenCLArrayContext, box_id_dtype):
-        from pyopencl.reduction import ReductionKernel
-        return ReductionKernel(
-            actx.context,
-            np.float64,
-            neutral="0.0",
-            reduce_expr="a+b",
-            map_expr=r"""
-                (level_start_target_or_target_parent_box_nrs[i + 1]
-                 - level_start_target_or_target_parent_box_nrs[i])
-                 * l2l_cost[i - 1]
-            """,
-            arguments=Template(r"""
-                ${box_id_t} *level_start_target_or_target_parent_box_nrs,
-                double *l2l_cost
-            """).render(
-                box_id_t=dtype_to_ctype(box_id_dtype)
-            ),
-            name="process_refine_locals"
-        )
+        @memoize_in(actx, (
+            FMMCostModel.process_refine_locals_knl, box_id_dtype))
+        def get_kernel():
+            from pyopencl.reduction import ReductionKernel
+            return ReductionKernel(
+                actx.context,
+                np.float64,
+                neutral="0.0",
+                reduce_expr="a+b",
+                map_expr=r"""
+                    (level_start_target_or_target_parent_box_nrs[i + 1]
+                    - level_start_target_or_target_parent_box_nrs[i])
+                    * l2l_cost[i - 1]
+                """,
+                arguments=Template(r"""
+                    ${box_id_t} *level_start_target_or_target_parent_box_nrs,
+                    double *l2l_cost
+                """).render(
+                    box_id_t=dtype_to_ctype(box_id_dtype)
+                ),
+                name="process_refine_locals"
+            )
+
+        return get_kernel()
 
     def process_refine_locals(self, actx: PyOpenCLArrayContext,
                               traversal, l2l_cost):

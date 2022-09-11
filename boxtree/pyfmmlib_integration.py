@@ -36,6 +36,7 @@ THE SOFTWARE.
 """
 
 import enum
+from abc import ABC, abstractmethod
 
 import numpy as np
 
@@ -51,7 +52,7 @@ logger = logging.getLogger(__name__)
 
 # {{{ rotation data interface
 
-class FMMLibRotationDataInterface:
+class FMMLibRotationDataInterface(ABC):
     """Abstract interface for additional, optional data for precomputation of
     rotation matrices passed to the expansion wrangler.
 
@@ -61,16 +62,16 @@ class FMMLibRotationDataInterface:
 
     """
 
+    @abstractmethod
     def m2l_rotation_lists(self):
         """Return a :mod:`numpy` array mapping entries of List 2 to rotation classes.
         """
-        raise NotImplementedError
 
+    @abstractmethod
     def m2l_rotation_angles(self):
         """Return a :mod:`numpy` array mapping List 2 rotation classes to
         rotation angles.
         """
-        raise NotImplementedError
 
 
 class FMMLibRotationData(FMMLibRotationDataInterface):

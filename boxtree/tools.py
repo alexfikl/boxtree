@@ -651,7 +651,10 @@ def mask_to_csr(actx: PyOpenCLArrayContext, mask, list_dtype=None):
 
     if len(mask.shape) == 1:
         knl = get_list_compressor_kernel()
-        result, evt = knl(actx.queue, mask.shape[0], mask.data)
+        result, evt = knl(
+            actx.queue, mask.shape[0], mask.data,
+            allocator=actx.allocator,
+            )
         result["output"].lists.add_event(evt)
 
         return (result["output"].lists,)
@@ -662,9 +665,11 @@ def mask_to_csr(actx: PyOpenCLArrayContext, mask, list_dtype=None):
         size = mask.dtype.itemsize
         assert size > 0
 
-        result, evt = knl(actx.queue, mask.shape[0], mask.shape[1],
-                            mask.strides[0] // size, mask.strides[1] // size,
-                            mask.data)
+        result, evt = knl(
+            actx.queue, mask.shape[0], mask.shape[1],
+            mask.strides[0] // size, mask.strides[1] // size, mask.data,
+            allocator=actx.allocator,
+            )
         result["output"].starts.add_event(evt)
         result["output"].lists.add_event(evt)
 

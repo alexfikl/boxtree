@@ -285,7 +285,7 @@ def compute_used_translation_classes(
         compute_used_translation_classes,
         dimensions, well_sep_is_n_away, tree.box_id_dtype,
         tree.box_level_dtype, coord_dtype, is_translation_per_level))
-    def get_translation_class_finder_knl():
+    def get_translation_class_finder_kernel():
         coord_vec_dtype = get_coord_vec_dtype(coord_dtype, dimensions)
         int_coord_vec_dtype = get_coord_vec_dtype(np.dtype(np.int32), dimensions)
 
@@ -323,7 +323,7 @@ def compute_used_translation_classes(
     translation_class_is_used = actx.zeros(ntranslation_classes, dtype=np.int32)
     error_flag = actx.zeros(1, dtype=np.int32)
 
-    translation_class_finder_knl = get_translation_class_finder_knl()
+    translation_class_finder_knl = get_translation_class_finder_kernel()
     evt = translation_class_finder_knl(
             trav.from_sep_siblings_lists,
             trav.from_sep_siblings_starts,

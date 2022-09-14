@@ -688,7 +688,7 @@ def build_area_query(
             for ax in AXIS_NAMES[:tree.dimensions]]
 
         from pyopencl.algorithm import ListOfListsBuilder
-        area_query_kernel = ListOfListsBuilder(
+        area_query_knl = ListOfListsBuilder(
             actx.context,
             [("leaves", tree.box_id_dtype)],
             str(template.render(**render_vars)),
@@ -698,20 +698,20 @@ def build_area_query(
             complex_kernel=True)
 
         logger.debug("done building area query kernel")
-        return area_query_kernel
+        return area_query_knl
 
-    area_query_kernel = get_area_query_kernel()
+    area_query_knl = get_area_query_kernel()
 
     with ProcessLogger(logger, "area query"):
-        result, _ = area_query_kernel(
+        result, _ = area_query_knl(
                 actx.queue, len(ball_radii),
                 tree.box_centers.data, tree.root_extent,
                 tree.box_levels, tree.aligned_nboxes,
                 tree.box_child_ids.data, tree.box_flags,
                 peer_lists.peer_list_starts,
                 peer_lists.peer_lists, ball_radii,
-                *(tuple(tree.bounding_box[0])
-                    + tuple(bc for bc in ball_centers)),
+                *(tuple(tree.bounding_box[0]) + tuple(bc for bc in ball_centers)),
+                allocator=actx.allocator,
                 )
 
     # }}}
@@ -831,7 +831,9 @@ def build_leaves_to_balls_lookup(
         evt = starts_expander_knl(
                 expanded_starts,
                 area_query.leaves_near_ball_starts,
-                nballs_p_1)
+                nballs_p_1,
+                queue=actx.queue,
+                )
         expanded_starts.add_event(evt)
 
         logger.debug("leaves-to-balls lookup: key-value sort")
@@ -844,6 +846,7 @@ def build_leaves_to_balls_lookup(
                 # values
                 expanded_starts,
                 nkeys, starts_dtype=tree.box_id_dtype,
+                allocator=actx.allocator,
                 )
 
     # }}}
@@ -951,18 +954,19 @@ def build_space_invader_query(
                 max_levels,
                 root_extent_stretch_factor=root_extent_stretch_factor)
 
-    space_invader_query_kernel = get_space_invader_query_kernel()
+    space_invader_query_knl = get_space_invader_query_kernel()
 
     with ProcessLogger(logger, "space invader query"):
         outer_space_invader_dists = actx.zeros(tree.nboxes, np.float32)
-        evt = space_invader_query_kernel(
+        evt = space_invader_query_knl(
                 *SPACE_INVADER_QUERY_TEMPLATE.unwrap_args(
                     tree, peer_lists,
                     ball_radii,
                     outer_space_invader_dists,
                     *tuple(bc for bc in ball_centers)),
                 queue=actx.queue,
-                range=slice(len(ball_radii)))
+                range=slice(len(ball_radii)),
+                )
         outer_space_invader_dists.add_event(evt)
 
         if tree.coord_dtype != np.dtype(np.float32):
@@ -1089,7 +1093,7 @@ def build_peer_list(actx: PyOpenCLArrayContext, tree: Tree) -> PeerListLookup:
         ]
 
         from pyopencl.algorithm import ListOfListsBuilder
-        peer_list_finder_kernel = ListOfListsBuilder(
+        peer_list_finder_knl = ListOfListsBuilder(
             actx.context,
             [("peers", tree.box_id_dtype)],
             str(template.render(**render_vars)),
@@ -1099,16 +1103,17 @@ def build_peer_list(actx: PyOpenCLArrayContext, tree: Tree) -> PeerListLookup:
             complex_kernel=True)
 
         logger.debug("done building peer list finder kernel")
-        return peer_list_finder_kernel
+        return peer_list_finder_knl
 
-    peer_list_finder_kernel = get_peer_list_finder_kernel()
+    peer_list_finder_knl = get_peer_list_finder_kernel()
 
     with ProcessLogger(logger, "find peer lists"):
-        result, evt = peer_list_finder_kernel(
+        result, evt = peer_list_finder_knl(
                 actx.queue, tree.nboxes,
                 tree.box_centers.data, tree.root_extent,
                 tree.box_levels, tree.aligned_nboxes,
                 tree.box_child_ids.data, tree.box_flags,
+                allocator=actx.allocator,
                 )
 
     lookup = PeerListLookup(

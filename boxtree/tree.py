@@ -647,8 +647,10 @@ def link_point_sources(
     tree_order_point_source_counts = actx.empty(
             tree.nsources, tree.particle_id_dtype)
 
-    @memoize_in(actx, (link_point_sources, tree.particle_id_dtype))
-    def get_point_source_linking_source_scan_knl():
+    @memoize_in(actx, (
+        link_point_sources, tree.particle_id_dtype,
+        "point_source_linking_source_scan"))
+    def get_point_source_linking_source_scan_kernel():
         from boxtree.tree_build_kernels import POINT_SOURCE_LINKING_SOURCE_SCAN_TPL
         return POINT_SOURCE_LINKING_SOURCE_SCAN_TPL.build(
             actx.queue.context,
@@ -661,10 +663,14 @@ def link_point_sources(
 
     logger.debug("point source linking: tree order source scan")
 
-    knl = get_point_source_linking_source_scan_knl()
-    knl(point_source_starts, tree.user_source_ids,
+    knl = get_point_source_linking_source_scan_kernel()
+    knl(
+            point_source_starts, tree.user_source_ids,
             tree_order_point_source_starts, tree_order_point_source_counts,
-            npoint_sources_dev, size=tree.nsources, queue=actx.queue)
+            npoint_sources_dev, size=tree.nsources,
+            queue=actx.queue,
+            allocator=actx.allocator,
+            )
 
     # }}}
 
@@ -680,11 +686,8 @@ def link_point_sources(
     user_point_source_ids = actx.empty(npoint_sources, tree.particle_id_dtype)
     user_point_source_ids.fill(1)
 
-    import pyopencl.array as cl_array
-    cl_array.multi_put(
-            [tree_order_index_user_point_source_starts],
-            dest_indices=tree_order_point_source_starts,
-            out=[user_point_source_ids])
+    user_point_source_ids[tree_order_point_source_starts] = (
+        tree_order_index_user_point_source_starts)
 
     if debug:
         ups_host = actx.to_numpy(user_point_source_ids)
@@ -694,16 +697,13 @@ def link_point_sources(
     source_boundaries = actx.zeros(npoint_sources, np.int8)
 
     # FIXME: Should be a scalar, in principle.
-    ones = actx.empty(tree.nsources, np.int8)
-    ones.fill(1)
+    ones = 1 + actx.zeros(1, np.int8)
+    source_boundaries[tree_order_point_source_starts] = ones
 
-    cl_array.multi_put(
-            [ones],
-            dest_indices=tree_order_point_source_starts,
-            out=[source_boundaries])
-
-    @memoize_in(actx, (link_point_sources, tree.particle_id_dtype))
-    def get_point_source_linking_user_point_source_id_scan_knl():
+    @memoize_in(actx, (
+        link_point_sources, tree.particle_id_dtype,
+        "point_source_linking_user-point_source_id_scan"))
+    def get_point_source_linking_user_point_source_id_scan_kernel():
         from boxtree.tree_build_kernels import (
                 POINT_SOURCE_LINKING_USER_POINT_SOURCE_ID_SCAN_TPL)
         return POINT_SOURCE_LINKING_USER_POINT_SOURCE_ID_SCAN_TPL.build(
@@ -716,9 +716,11 @@ def link_point_sources(
             )
 
     logger.debug("point source linking: point source id scan")
-    knl = get_point_source_linking_user_point_source_id_scan_knl()
+    knl = get_point_source_linking_user_point_source_id_scan_kernel()
     knl(source_boundaries, user_point_source_ids,
-            size=npoint_sources, queue=actx.queue)
+            size=npoint_sources,
+            queue=actx.queue,
+            allocator=actx.allocator)
 
     if debug:
         ups_host = actx.to_numpy(user_point_source_ids)
@@ -727,6 +729,7 @@ def link_point_sources(
 
     # }}}
 
+    import pyopencl.array as cl_array
     from pytools.obj_array import make_obj_array
     tree_order_point_sources = make_obj_array([
         cl_array.take(point_sources[i], user_point_source_ids, queue=actx.queue)
@@ -736,8 +739,9 @@ def link_point_sources(
     # {{{ compute box point source metadata
 
     @memoize_in(actx, (
-        link_point_sources, tree.particle_id_dtype, tree.box_id_dtype))
-    def get_point_source_linking_box_point_sources_knl():
+        link_point_sources, tree.particle_id_dtype, tree.box_id_dtype,
+        "point_source_linking_box_point_sources"))
+    def get_point_source_linking_box_point_sources_kernel():
         from boxtree.tree_build_kernels import POINT_SOURCE_LINKING_BOX_POINT_SOURCES
         return POINT_SOURCE_LINKING_BOX_POINT_SOURCES.build(
             actx.queue.context,
@@ -754,7 +758,7 @@ def link_point_sources(
     box_point_source_counts_nonchild = actx.empty(
             tree.nboxes, tree.particle_id_dtype)
 
-    knl = get_point_source_linking_box_point_sources_knl()
+    knl = get_point_source_linking_box_point_sources_kernel()
     knl(
             box_point_source_starts, box_point_source_counts_nonchild,
             box_point_source_counts_cumul,
@@ -764,7 +768,9 @@ def link_point_sources(
 
             tree_order_point_source_starts,
             tree_order_point_source_counts,
-            range=slice(tree.nboxes), queue=actx.queue)
+            range=slice(tree.nboxes),
+            queue=actx.queue,
+            )
 
     # }}}
 
@@ -916,12 +922,15 @@ def filter_target_lists_in_user_order(
             np.arange(tree.ntargets, dtype=user_target_ids.dtype)
             )
 
-    kernel = get_kernel()
-    result, _ = kernel(actx.queue, tree.nboxes,
+    knl = get_kernel()
+    result, _ = knl(
+            actx.queue, tree.nboxes,
             user_order_flags,
             user_target_ids,
             tree.box_target_starts,
-            tree.box_target_counts_nonchild)
+            tree.box_target_counts_nonchild,
+            allocator=actx.allocator,
+            )
 
     target_lists = FilteredTargetListsInUserOrder(
             nfiltered_targets=result["filt_tgt_list"].count,
@@ -1041,7 +1050,9 @@ def filter_target_lists_in_tree_order(
             filtered_from_unfiltered_target_indices,
             unfiltered_from_filtered_target_indices,
             nfiltered_targets,
-            queue=actx.queue)
+            queue=actx.queue,
+            allocator=actx.allocator,
+            )
 
     nfiltered_targets = int(actx.to_numpy(nfiltered_targets))
 
@@ -1070,7 +1081,8 @@ def filter_target_lists_in_tree_order(
             box_target_starts_filtered,
             box_target_counts_nonchild_filtered,
 
-            queue=actx.queue)
+            queue=actx.queue,
+            )
 
     target_lists = FilteredTargetListsInTreeOrder(
             nfiltered_targets=nfiltered_targets,

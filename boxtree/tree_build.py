@@ -642,7 +642,9 @@ def build_tree(
 
         # writes: box_morton_bin_counts
         knl_info.morton_count_scan(
-                *morton_count_args, queue=actx.queue, size=nsrcntgts)
+                *morton_count_args, queue=actx.queue, size=nsrcntgts,
+                allocator=actx.allocator,
+                )
 
         debug_with_finish("split box id scan")
 
@@ -666,6 +668,7 @@ def build_tree(
 
                 queue=actx.queue,
                 size=level_start_box_nrs[level],
+                allocator=actx.allocator,
                 )
 
         # {{{ compute new level_used_box_counts, level_leaf_counts
@@ -947,6 +950,7 @@ def build_tree(
 
         knl_info.box_splitter_kernel(*box_splitter_args,
                 range=slice(level_start_box_nrs[-1]),
+                queue=actx.queue,
                 )
 
         debug_with_finish("box splitter")
@@ -978,7 +982,9 @@ def build_tree(
                 new_user_srcntgt_ids, new_srcntgt_box_ids))
 
         knl_info.particle_renumberer_kernel(
-                *particle_renumberer_args, range=slice(nsrcntgts))
+                *particle_renumberer_args, range=slice(nsrcntgts),
+                queue=actx.queue,
+                )
 
         debug_with_finish("particle renumbering")
 
@@ -1051,6 +1057,7 @@ def build_tree(
                     have_upper_level_split_box,
                     *(box_child_ids + box_centers),
                     slice=upper_level_slice,
+                    queue=actx.queue,
                     )
 
                 if debug:
@@ -1165,6 +1172,7 @@ def build_tree(
                 box_srcntgt_counts_nonchild,
 
                 range=slice(nboxes),
+                queue=actx.queue,
                 )
 
         del highest_possibly_split_box_nr
@@ -1208,7 +1216,10 @@ def build_tree(
         knl_info.find_prune_indices_kernel(
                 box_srcntgt_counts_cumul,
                 src_box_id, dst_box_id, nboxes_post_prune_dev,
-                size=nboxes)
+                size=nboxes,
+                queue=actx.queue,
+                allocator=actx.allocator,
+                )
         nboxes_post_prune = int(actx.to_numpy(nboxes_post_prune_dev).item())
 
         logger.debug(
@@ -1277,7 +1288,10 @@ def build_tree(
 
         # Update box counts and level start box indices.
         knl_info.find_level_box_counts_kernel(
-            box_levels, level_used_box_counts_dev)
+            box_levels, level_used_box_counts_dev,
+            queue=actx.queue,
+            allocator=actx.allocator,
+            )
 
         nlevels = len(level_used_box_counts)
         level_used_box_counts = (
@@ -1316,8 +1330,9 @@ def build_tree(
 
         debug_with_finish("source counter")
         knl_info.source_counter(
-                user_srcntgt_ids, nsources,
-                source_numbers, queue=actx.queue, allocator=actx.allocator,
+                user_srcntgt_ids, nsources, source_numbers,
+                queue=actx.queue,
+                allocator=actx.allocator,
                 )
 
         user_source_ids = actx.empty(nsources, particle_id_dtype)
@@ -1404,6 +1419,7 @@ def build_tree(
         knl_info.srcntgt_permuter(
                 user_srcntgt_ids,
                 *(tuple(srcntgts) + tuple(sources)),
+                queue=actx.queue,
                 )
 
         assert srcntgt_radii is None
@@ -1430,16 +1446,11 @@ def build_tree(
                 )
 
         if srcntgt_radii is not None:
-            import pyopencl.array as cl_array
             debug_with_finish("srcntgt permuter (source radii)")
-            source_radii = cl_array.take(
-                    srcntgt_radii, user_source_ids, queue=actx.queue,
-                    )
+            source_radii = srcntgt_radii[user_source_ids]
 
             debug_with_finish("srcntgt permuter (target radii)")
-            target_radii = cl_array.take(
-                    srcntgt_radii, srcntgt_target_ids, queue=actx.queue,
-                    )
+            target_radii = srcntgt_radii[srcntgt_target_ids]
 
         del srcntgt_target_ids
 
@@ -1537,6 +1548,7 @@ def build_tree(
                 box_flags,
             ),
             range=slice(nboxes_post_prune),
+            queue=actx.queue,
             )
 
     # }}}
@@ -1612,7 +1624,9 @@ def build_tree(
                         box_bounding_box_max))
 
             knl_info.box_extents_finder_kernel(
-                    *args, range=slice(start, stop), queue=actx.queue)
+                    *args, range=slice(start, stop),
+                    queue=actx.queue,
+                    )
 
     del bogus_radii_array
 

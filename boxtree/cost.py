@@ -719,11 +719,11 @@ class FMMCostModel(AbstractFMMCostModel):
 
     # {{{ form multipoles
 
-    def process_form_multipoles_knl(self, actx: PyOpenCLArrayContext,
+    def process_form_multipoles_kernel(self, actx: PyOpenCLArrayContext,
                                     box_id_dtype, particle_id_dtype,
                                     box_level_dtype):
         @memoize_in(actx, (
-            FMMCostModel.process_form_multipoles_knl,
+            FMMCostModel.process_form_multipoles_kernel,
             box_id_dtype, particle_id_dtype, box_level_dtype))
         def get_kernel():
             return ElementwiseKernel(
@@ -758,7 +758,7 @@ class FMMCostModel(AbstractFMMCostModel):
         tree = traversal.tree
         np2m = actx.zeros(len(traversal.source_boxes), dtype=np.float64)
 
-        process_form_multipoles_knl = self.process_form_multipoles_knl(
+        process_form_multipoles_knl = self.process_form_multipoles_kernel(
             actx, tree.box_id_dtype, tree.particle_id_dtype, tree.box_level_dtype
         )
 
@@ -769,6 +769,7 @@ class FMMCostModel(AbstractFMMCostModel):
             tree.box_levels,
             p2m_cost,
             queue=actx.queue,
+            allocator=actx.allocator,
         )
 
         return np2m
@@ -777,11 +778,11 @@ class FMMCostModel(AbstractFMMCostModel):
 
     # {{{ propagate multipoles upward
 
-    def process_coarsen_multipoles_knl(self, actx: PyOpenCLArrayContext,
-                                       ndimensions, box_id_dtype,
-                                       box_level_dtype, nlevels):
+    def process_coarsen_multipoles_kernel(self, actx: PyOpenCLArrayContext,
+                                          ndimensions, box_id_dtype,
+                                          box_level_dtype, nlevels):
         @memoize_in(actx, (
-            FMMCostModel.process_coarsen_multipoles_knl,
+            FMMCostModel.process_coarsen_multipoles_kernel,
             ndimensions, box_id_dtype, box_level_dtype, nlevels))
         def get_kernel():
             return ElementwiseKernel(
@@ -832,7 +833,7 @@ class FMMCostModel(AbstractFMMCostModel):
         tree = traversal.tree
         nm2m = actx.zeros(len(traversal.source_parent_boxes), dtype=np.float64)
 
-        process_coarsen_multipoles_knl = self.process_coarsen_multipoles_knl(
+        process_coarsen_multipoles_knl = self.process_coarsen_multipoles_kernel(
             actx,
             tree.dimensions, tree.box_id_dtype, tree.box_level_dtype, tree.nlevels
         )
@@ -843,7 +844,8 @@ class FMMCostModel(AbstractFMMCostModel):
             m2m_cost,
             nm2m,
             *tree.box_child_ids,
-            queue=actx.queue
+            queue=actx.queue,
+            allocator=actx.allocator,
         )
 
         return self.aggregate_over_boxes(actx, nm2m)
@@ -852,10 +854,10 @@ class FMMCostModel(AbstractFMMCostModel):
 
     # {{{ direct evaluation to point targets (lists 1, 3 close, 4 close)
 
-    def _get_ndirect_sources_knl(self, actx: PyOpenCLArrayContext,
+    def _get_ndirect_sources_kernel(self, actx: PyOpenCLArrayContext,
                                  particle_id_dtype, box_id_dtype):
         @memoize_in(actx, (
-            FMMCostModel._get_ndirect_sources_knl,
+            FMMCostModel._get_ndirect_sources_kernel,
             particle_id_dtype, box_id_dtype))
         def get_kernel():
             return ElementwiseKernel(
@@ -901,7 +903,7 @@ class FMMCostModel(AbstractFMMCostModel):
         particle_id_dtype = tree.particle_id_dtype
         box_id_dtype = tree.box_id_dtype
 
-        get_ndirect_sources_knl = self._get_ndirect_sources_knl(
+        get_ndirect_sources_knl = self._get_ndirect_sources_kernel(
             actx, particle_id_dtype, box_id_dtype
         )
 
@@ -914,7 +916,9 @@ class FMMCostModel(AbstractFMMCostModel):
             ndirect_sources_by_itgt_box,
             traversal.neighbor_source_boxes_starts,
             traversal.neighbor_source_boxes_lists,
-            tree.box_source_counts_nonchild
+            tree.box_source_counts_nonchild,
+            queue=actx.queue,
+            allocator=actx.allocator,
         )
 
         # List 3 close
@@ -924,7 +928,9 @@ class FMMCostModel(AbstractFMMCostModel):
                 ndirect_sources_by_itgt_box,
                 traversal.from_sep_close_smaller_starts,
                 traversal.from_sep_close_smaller_lists,
-                tree.box_source_counts_nonchild
+                tree.box_source_counts_nonchild,
+                queue=actx.queue,
+                allocator=actx.allocator,
             )
 
         # List 4 close
@@ -934,7 +940,9 @@ class FMMCostModel(AbstractFMMCostModel):
                 ndirect_sources_by_itgt_box,
                 traversal.from_sep_close_bigger_starts,
                 traversal.from_sep_close_bigger_lists,
-                tree.box_source_counts_nonchild
+                tree.box_source_counts_nonchild,
+                queue=actx.queue,
+                allocator=actx.allocator,
             )
 
         return ndirect_sources_by_itgt_box
@@ -954,10 +962,10 @@ class FMMCostModel(AbstractFMMCostModel):
 
     # {{{ translate separated siblings' ("list 2") mpoles to local
 
-    def process_list2_knl(self, actx: PyOpenCLArrayContext,
-                          box_id_dtype, box_level_dtype):
+    def process_list2_kernel(self, actx: PyOpenCLArrayContext,
+                             box_id_dtype, box_level_dtype):
         @memoize_in(actx, (
-            FMMCostModel.process_list2_knl, box_id_dtype, box_level_dtype))
+            FMMCostModel.process_list2_kernel, box_id_dtype, box_level_dtype))
         def get_kernel():
             return ElementwiseKernel(
                 actx.context,
@@ -994,7 +1002,7 @@ class FMMCostModel(AbstractFMMCostModel):
         ntarget_or_target_parent_boxes = len(traversal.target_or_target_parent_boxes)
         nm2l = actx.zeros((ntarget_or_target_parent_boxes,), dtype=np.float64)
 
-        process_list2_knl = self.process_list2_knl(
+        process_list2_knl = self.process_list2_kernel(
             actx, box_id_dtype, box_level_dtype
         )
         process_list2_knl(
@@ -1004,6 +1012,7 @@ class FMMCostModel(AbstractFMMCostModel):
             tree.box_levels,
             m2l_cost,
             queue=actx.queue,
+            allocator=actx.allocator,
         )
 
         return nm2l
@@ -1012,10 +1021,10 @@ class FMMCostModel(AbstractFMMCostModel):
 
     # {{{ evaluate sep. smaller mpoles ("list 3") at particles
 
-    def process_list3_knl(self, actx: PyOpenCLArrayContext,
-                          box_id_dtype, particle_id_dtype):
+    def process_list3_kernel(self, actx: PyOpenCLArrayContext,
+                             box_id_dtype, particle_id_dtype):
         @memoize_in(actx, (
-            FMMCostModel.process_list3_knl,
+            FMMCostModel.process_list3_kernel,
             box_id_dtype, particle_id_dtype))
         def get_kernel():
             return ElementwiseKernel(
@@ -1055,7 +1064,7 @@ class FMMCostModel(AbstractFMMCostModel):
         if box_target_counts_nonchild is None:
             box_target_counts_nonchild = tree.box_target_counts_nonchild
 
-        process_list3_knl = self.process_list3_knl(
+        process_list3_knl = self.process_list3_kernel(
             actx, tree.box_id_dtype, tree.particle_id_dtype
         )
 
@@ -1067,7 +1076,8 @@ class FMMCostModel(AbstractFMMCostModel):
                 box_target_counts_nonchild,
                 actx.to_numpy(m2p_cost[ilevel]).reshape(-1)[0],
                 nm2p,
-                queue=actx.queue
+                queue=actx.queue,
+                allocator=actx.allocator,
             )
 
         return nm2p
@@ -1076,10 +1086,10 @@ class FMMCostModel(AbstractFMMCostModel):
 
     # {{{ form locals for separated bigger source boxes ("list 4")
 
-    def process_list4_knl(self, actx: PyOpenCLArrayContext,
-                          box_id_dtype, particle_id_dtype, box_level_dtype):
+    def process_list4_kernel(self, actx: PyOpenCLArrayContext,
+                             box_id_dtype, particle_id_dtype, box_level_dtype):
         @memoize_in(actx, (
-            FMMCostModel.process_list4_knl,
+            FMMCostModel.process_list4_kernel,
             box_id_dtype, particle_id_dtype, box_level_dtype))
         def get_kernel():
             return ElementwiseKernel(
@@ -1120,7 +1130,7 @@ class FMMCostModel(AbstractFMMCostModel):
         target_or_target_parent_boxes = traversal.target_or_target_parent_boxes
         nm2p = actx.zeros(len(target_or_target_parent_boxes), dtype=np.float64)
 
-        process_list4_knl = self.process_list4_knl(
+        process_list4_knl = self.process_list4_kernel(
             actx,
             tree.box_id_dtype, tree.particle_id_dtype, tree.box_level_dtype
         )
@@ -1132,7 +1142,8 @@ class FMMCostModel(AbstractFMMCostModel):
             tree.box_source_counts_nonchild,
             tree.box_levels,
             p2l_cost,
-            queue=actx.queue
+            queue=actx.queue,
+            allocator=actx.allocator,
         )
 
         return nm2p
@@ -1141,11 +1152,11 @@ class FMMCostModel(AbstractFMMCostModel):
 
     # {{{ evaluate local expansions at targets
 
-    def process_eval_locals_knl(self, actx: PyOpenCLArrayContext,
-                                box_id_dtype, particle_id_dtype, box_level_dtype):
+    def process_eval_locals_kernel(self, actx: PyOpenCLArrayContext,
+                                   box_id_dtype, particle_id_dtype, box_level_dtype):
 
         @memoize_in(actx, (
-            FMMCostModel.process_eval_locals_knl,
+            FMMCostModel.process_eval_locals_kernel,
             box_id_dtype, particle_id_dtype, box_level_dtype))
         def get_kernel():
             return ElementwiseKernel(
@@ -1185,7 +1196,7 @@ class FMMCostModel(AbstractFMMCostModel):
         if box_target_counts_nonchild is None:
             box_target_counts_nonchild = traversal.tree.box_target_counts_nonchild
 
-        process_eval_locals_knl = self.process_eval_locals_knl(
+        process_eval_locals_knl = self.process_eval_locals_kernel(
             actx, tree.box_id_dtype, tree.particle_id_dtype, tree.box_level_dtype
         )
 
@@ -1194,7 +1205,9 @@ class FMMCostModel(AbstractFMMCostModel):
             traversal.target_boxes,
             box_target_counts_nonchild,
             tree.box_levels,
-            l2p_cost
+            l2p_cost,
+            queue=actx.queue,
+            allocator=actx.allocator,
         )
 
         return neval_locals
@@ -1203,9 +1216,9 @@ class FMMCostModel(AbstractFMMCostModel):
 
     # {{{ propagate locals downward
 
-    def process_refine_locals_knl(self, actx: PyOpenCLArrayContext, box_id_dtype):
+    def process_refine_locals_kernel(self, actx: PyOpenCLArrayContext, box_id_dtype):
         @memoize_in(actx, (
-            FMMCostModel.process_refine_locals_knl, box_id_dtype))
+            FMMCostModel.process_refine_locals_kernel, box_id_dtype))
         def get_kernel():
             from pyopencl.reduction import ReductionKernel
             return ReductionKernel(
@@ -1232,7 +1245,7 @@ class FMMCostModel(AbstractFMMCostModel):
     def process_refine_locals(self, actx: PyOpenCLArrayContext,
                               traversal, l2l_cost):
         tree = traversal.tree
-        process_refine_locals_knl = self.process_refine_locals_knl(
+        process_refine_locals_knl = self.process_refine_locals_kernel(
             actx, tree.box_id_dtype
         )
 
@@ -1243,7 +1256,9 @@ class FMMCostModel(AbstractFMMCostModel):
         cost = process_refine_locals_knl(
             level_start_target_or_target_parent_box_nrs,
             l2l_cost,
-            range=slice(1, tree.nlevels)
+            range=slice(1, tree.nlevels),
+            queue=actx.queue,
+            allocator=actx.allocator,
         )
 
         return actx.to_numpy(cost).reshape(-1)[0]

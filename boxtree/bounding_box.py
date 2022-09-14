@@ -161,6 +161,10 @@ def find_bounding_box(actx: PyOpenCLArrayContext, particles, radii):
         radii_tuple = (radii,)
 
     knl = get_kernel()
-    return knl(*(tuple(particles) + radii_tuple), queue=actx.queue)
+    return knl(
+        *(tuple(particles) + radii_tuple),
+        queue=actx.queue,
+        allocator=actx.allocator,
+        )
 
 # vim: foldmethod=marker:filetype=pyopencl

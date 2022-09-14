@@ -2006,7 +2006,8 @@ def build_traversal(
         extra_args.append(source_parent_boxes_mask)
 
     result, evt = knl.sources_parents_and_targets_builder(
-        actx.queue, tree.nboxes, tree.box_flags, *extra_args
+        actx.queue, tree.nboxes, tree.box_flags, *extra_args,
+        allocator=actx.allocator,
     )
 
     wait_for = [evt]
@@ -2034,7 +2035,8 @@ def build_traversal(
                 box_list,
                 result,
                 range=slice(0, len(box_list)),
-                queue=actx.queue, wait_for=wait_for)
+                queue=actx.queue, wait_for=wait_for,
+                )
 
         result = actx.to_numpy(result)
 
@@ -2082,7 +2084,8 @@ def build_traversal(
             actx.queue, tree.nboxes,
             tree.box_centers.data, tree.root_extent, tree.box_levels,
             tree.aligned_nboxes, tree.box_child_ids.data, tree.box_flags,
-            wait_for=wait_for)
+            wait_for=wait_for, allocator=actx.allocator,
+            )
     wait_for = [evt]
     same_level_non_well_sep_boxes = result["same_level_non_well_sep_boxes"]
 
@@ -2096,7 +2099,8 @@ def build_traversal(
             actx.queue, len(target_boxes),
             tree.box_centers.data, tree.root_extent, tree.box_levels,
             tree.aligned_nboxes, tree.box_child_ids.data, tree.box_flags,
-            target_boxes, wait_for=wait_for)
+            target_boxes, wait_for=wait_for, allocator=actx.allocator,
+            )
 
     wait_for = [evt]
     neighbor_source_boxes = result["neighbor_source_boxes"]
@@ -2114,7 +2118,8 @@ def build_traversal(
             target_or_target_parent_boxes, tree.box_parent_ids.data,
             same_level_non_well_sep_boxes.starts,
             same_level_non_well_sep_boxes.lists,
-            wait_for=wait_for)
+            wait_for=wait_for, allocator=actx.allocator,
+            )
     wait_for = [evt]
     from_sep_siblings = result["from_sep_siblings"]
 
@@ -2149,7 +2154,9 @@ def build_traversal(
         result, evt = knl.from_sep_smaller_builder(
                 *(from_sep_smaller_base_args + (ilevel,)),
                 omit_lists=("from_sep_close_smaller",) if with_extent else (),
-                wait_for=wait_for)
+                wait_for=wait_for,
+                allocator=actx.allocator,
+                )
 
         target_boxes_sep_smaller = target_boxes[
             result["from_sep_smaller"].nonempty_indices]
@@ -2163,7 +2170,9 @@ def build_traversal(
         result, evt = knl.from_sep_smaller_builder(
                 *(from_sep_smaller_base_args + (-1,)),
                 omit_lists=("from_sep_smaller",),
-                wait_for=wait_for)
+                wait_for=wait_for,
+                allocator=actx.allocator,
+                )
         from_sep_close_smaller_starts = result["from_sep_close_smaller"].starts
         from_sep_close_smaller_lists = result["from_sep_close_smaller"].lists
 
@@ -2189,7 +2198,8 @@ def build_traversal(
             tree.box_parent_ids.data,
             same_level_non_well_sep_boxes.starts,
             same_level_non_well_sep_boxes.lists,
-            wait_for=wait_for)
+            wait_for=wait_for, allocator=actx.allocator,
+            )
 
     wait_for = [evt]
     from_sep_bigger = result["from_sep_bigger"]

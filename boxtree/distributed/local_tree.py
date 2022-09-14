@@ -203,7 +203,10 @@ def construct_local_particles_and_lists(
     knl(box_mask,
         box_particle_starts,
         box_particle_counts_nonchild,
-        particle_mask)
+        particle_mask,
+        queue=actx.queue,
+        allocator=actx.allocator,
+        )
 
     # }}}
 
@@ -214,7 +217,10 @@ def construct_local_particles_and_lists(
 
     global_to_local_particle_index[0] = 0
     knl = mask_scan_kernel(actx, particle_id_dtype)
-    knl(particle_mask, global_to_local_particle_index)
+    knl(particle_mask, global_to_local_particle_index,
+        queue=actx.queue,
+        allocator=actx.allocator,
+        )
 
     # }}}
 
@@ -232,7 +238,10 @@ def construct_local_particles_and_lists(
 
     knl = fetch_local_particles_kernel(
         actx, dimensions, particle_id_dtype, coord_dtype,
-        particles_have_extent=particles_have_extent)
+        particles_have_extent=particles_have_extent,
+        queue=actx.queue,
+        allocator=actx.allocator,
+        )
 
     if particles_have_extent:
         local_particle_radii = actx.empty(num_local_particles, dtype=coord_dtype)
@@ -241,13 +250,18 @@ def construct_local_particles_and_lists(
             *global_particles.tolist(),
             *local_particles,
             global_particle_radii,
-            local_particle_radii)
+            local_particle_radii,
+            queue=actx.queue,
+            allocator=actx.allocator,
+            )
     else:
         local_particle_radii = None
         knl(
             particle_mask, global_to_local_particle_index,
             *global_particles.tolist(),
-            *local_particles)
+            *local_particles,
+            queue=actx.queue,
+            allocator=actx.allocator,
 
     # {{{ construct the list of list indices
 
@@ -406,7 +420,10 @@ def generate_local_tree(
     knl(
         local_targets_and_lists.box_particle_counts_nonchild,
         local_targets_and_lists.box_particle_counts_cumul,
-        local_box_flags)
+        local_box_flags,
+        queue=actx.queue,
+        allocator=actx.allocator,
+        )
 
     # }}}
 

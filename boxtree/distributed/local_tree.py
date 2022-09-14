@@ -384,13 +384,10 @@ def generate_local_tree(
             multipole_src_boxes_all_ranks)
 
         from boxtree.tools import mask_to_csr
-        (box_to_user_rank_starts, box_to_user_rank_lists, evt) = \
+        (box_to_user_rank_starts, box_to_user_rank_lists) = (
             mask_to_csr(
                 actx, multipole_src_boxes_all_ranks.transpose(),
-                list_dtype=np.int32)
-
-        from pyopencl import wait_for_events
-        wait_for_events([evt])
+                list_dtype=np.int32))
 
         box_to_user_rank_starts = actx.to_numpy(box_to_user_rank_starts)
         box_to_user_rank_lists = actx.to_numpy(box_to_user_rank_lists)

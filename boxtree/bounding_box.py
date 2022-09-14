@@ -33,13 +33,13 @@ from boxtree.array_context import PyOpenCLArrayContext
 def make_bounding_box_dtype(device, dimensions, coord_dtype):
     from boxtree.tools import AXIS_NAMES
     fields = []
-    for i in range(dimensions):
-        fields.append(("min_%s" % AXIS_NAMES[i], coord_dtype))
-        fields.append(("max_%s" % AXIS_NAMES[i], coord_dtype))
+    for ax in AXIS_NAMES:
+        fields.append((f"min_{ax}", coord_dtype))
+        fields.append((f"max_{ax}", coord_dtype))
 
     dtype = np.dtype(fields)
 
-    name = "boxtree_bbox_%dd_%s_t" % (dimensions, get_type_moniker(coord_dtype))
+    name = "boxtree_bbox_{}d_{}_t".format(dimensions, get_type_moniker(coord_dtype))
 
     from pyopencl.tools import get_or_register_dtype, match_dtype_to_c_struct
     dtype, c_decl = match_dtype_to_c_struct(device, name, dtype)

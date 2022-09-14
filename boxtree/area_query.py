@@ -961,15 +961,14 @@ def build_space_invader_query(
                     *tuple(bc for bc in ball_centers)),
                 queue=actx.queue,
                 range=slice(len(ball_radii)))
+        outer_space_invader_dists.add_event(evt)
 
         if tree.coord_dtype != np.dtype(np.float32):
             # The kernel output is always an array of float32 due to limited
             # support for atomic operations with float64 in OpenCL.
             # Here the output is cast to match the coord dtype.
-            outer_space_invader_dists.finish()
-            outer_space_invader_dists = outer_space_invader_dists.astype(
-                    tree.coord_dtype)
-            evt, = outer_space_invader_dists.events
+            outer_space_invader_dists = (
+                outer_space_invader_dists.astype(tree.coord_dtype))
 
     # }}}
 

@@ -242,7 +242,6 @@ class AbstractFMMCostModel(ABC):
         :return: an array of shape (nsource_boxes,), with each entry represents
             the cost of the box.
         """
-        pass
 
     @abstractmethod
     def process_coarsen_multipoles(self, actx: PyOpenCLArrayContext,
@@ -259,7 +258,6 @@ class AbstractFMMCostModel(ABC):
             immediate clear how per-box cost of upward propagation will be useful for
             distributed load balancing.
         """
-        pass
 
     @abstractmethod
     def get_ndirect_sources_per_target_box(self, actx: PyOpenCLArrayContext,
@@ -271,7 +269,6 @@ class AbstractFMMCostModel(ABC):
         :return: an array of shape (ntarget_boxes,), with each entry representing
             the number of direct evaluation sources for that target box.
         """
-        pass
 
     @abstractmethod
     def process_direct(self, actx: PyOpenCLArrayContext,
@@ -292,7 +289,6 @@ class AbstractFMMCostModel(ABC):
         :return: an array of shape (ntarget_boxes,), with each entry represents
             the cost of the box.
         """
-        pass
 
     @abstractmethod
     def process_list2(self, actx: PyOpenCLArrayContext, traversal, m2l_cost):
@@ -304,7 +300,6 @@ class AbstractFMMCostModel(ABC):
             each entry representing the cost of multipole-to-local
             translations to this box.
         """
-        pass
 
     @abstractmethod
     def process_list3(self, actx: PyOpenCLArrayContext, traversal, m2p_cost,
@@ -322,7 +317,6 @@ class AbstractFMMCostModel(ABC):
             cost of evaluating all targets inside this box from multipole
             expansions of list-3 boxes.
         """
-        pass
 
     @abstractmethod
     def process_list4(self, actx: PyOpenCLArrayContext, traversal, p2l_cost):
@@ -335,7 +329,6 @@ class AbstractFMMCostModel(ABC):
             each entry representing the cost of point-to-local translations to
             this box.
         """
-        pass
 
     @abstractmethod
     def process_eval_locals(self, actx: PyOpenCLArrayContext, traversal, l2p_cost,
@@ -352,7 +345,6 @@ class AbstractFMMCostModel(ABC):
         :return: an array of shape (ntarget_boxes,), the cost of evaluating the
             potentials of all targets inside this box from its local expansion.
         """
-        pass
 
     @abstractmethod
     def process_refine_locals(self, actx: PyOpenCLArrayContext, traversal, l2l_cost):
@@ -368,7 +360,6 @@ class AbstractFMMCostModel(ABC):
             immediate clear how per-box cost of downward propagation will be useful
             for distributed load balancing.
         """
-        pass
 
     @abstractmethod
     def aggregate_over_boxes(self, actx: PyOpenCLArrayContext, per_box_result):
@@ -377,7 +368,6 @@ class AbstractFMMCostModel(ABC):
         :arg per_box_result: an array to be sumed.
         :return: a :class:`float`, the result of the sum.
         """
-        pass
 
     @staticmethod
     def cost_factors_to_dev(cost_factors, actx: Optional[PyOpenCLArrayContext]):
@@ -449,7 +439,6 @@ class AbstractFMMCostModel(ABC):
         :param nboxes: the number of boxes
         :return: an array of shape (*nboxes*,), representing the zero per-box cost.
         """
-        pass
 
     def cost_per_box(self, actx: PyOpenCLArrayContext, traversal, level_to_order,
                      calibration_params,

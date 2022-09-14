@@ -616,9 +616,8 @@ def mask_to_csr(actx: PyOpenCLArrayContext, mask, list_dtype=None):
         dtype.
 
     :returns: The return value depends on the type of the input.
-        * If mask* is 1D, returns a tuple *(list, evt)*.
-        * If *mask* is 2D, returns a tuple *(starts, lists, event)*, as a
-            :ref:`csr` list.
+        * If *mask* is 1D, returns a *(list,)*.
+        * If *mask* is 2D, returns a tuple *(starts, lists)*, as a :ref:`csr` list.
     """
     from pyopencl.algorithm import ListOfListsBuilder
 
@@ -653,7 +652,9 @@ def mask_to_csr(actx: PyOpenCLArrayContext, mask, list_dtype=None):
     if len(mask.shape) == 1:
         knl = get_list_compressor_kernel()
         result, evt = knl(actx.queue, mask.shape[0], mask.data)
-        return result["output"].lists, evt
+        result["output"].lists.add_event(evt)
+
+        return (result["output"].lists,)
     elif len(mask.shape) == 2:
         # FIXME: This is efficient for small column sizes but may not be
         # for larger ones since the work is partitioned by row.
@@ -664,7 +665,10 @@ def mask_to_csr(actx: PyOpenCLArrayContext, mask, list_dtype=None):
         result, evt = knl(actx.queue, mask.shape[0], mask.shape[1],
                             mask.strides[0] // size, mask.strides[1] // size,
                             mask.data)
-        return result["output"].starts, result["output"].lists, evt
+        result["output"].starts.add_event(evt)
+        result["output"].lists.add_event(evt)
+
+        return result["output"].starts, result["output"].lists
     else:
         raise ValueError("unsupported dimensionality")
 

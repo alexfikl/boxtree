@@ -58,9 +58,10 @@ def test_tree_connectivity(actx_factory, dims, sources_are_targets):
     else:
         targets = make_normal_particle_array(actx, 2 * 10**5, dims, dtype)
 
-    from boxtree import TreeBuilder
-    tb = TreeBuilder(actx)
-    tree, _ = tb(actx, sources, max_particles_in_box=30, targets=targets, debug=True)
+    from boxtree import build_tree
+    tree = build_tree(
+            actx, sources,
+            targets=targets, max_particles_in_box=30, debug=True)
 
     from boxtree.traversal import build_traversal
     trav = build_traversal(actx, tree, debug=True)
@@ -280,9 +281,8 @@ def test_plot_traversal(actx_factory, well_sep_is_n_away=1, visualize=False):
             actx.from_numpy(rng.normal(0.0, 1.0, (nparticles,)).astype(dtype))
             for i in range(dims)])
 
-        from boxtree import TreeBuilder
-        tb = TreeBuilder(actx)
-        tree, _ = tb(actx, particles, max_particles_in_box=30, debug=True)
+        from boxtree import build_tree
+        tree = build_tree(actx, particles, max_particles_in_box=30, debug=True)
 
         from boxtree.traversal import build_traversal
         trav = build_traversal(actx, tree, well_sep_is_n_away=well_sep_is_n_away)
@@ -331,9 +331,8 @@ def test_from_sep_siblings_translation_and_rotation_classes(
         actx.from_numpy(rng.normal(0.0, 1.0, (nparticles,)).astype(dtype))
         for i in range(dims)])
 
-    from boxtree import TreeBuilder
-    tb = TreeBuilder(actx)
-    tree, _ = tb(actx, particles, max_particles_in_box=30, debug=True)
+    from boxtree import build_tree
+    tree = build_tree(actx, particles, max_particles_in_box=30, debug=True)
 
     # }}}
 

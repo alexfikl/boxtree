@@ -47,9 +47,8 @@ def demo_cost_model():
 
         # {{{ Generate tree and traversal
 
-        from boxtree import TreeBuilder
-        tb = TreeBuilder(actx)
-        tree, _ = tb(
+        from boxtree import build_tree
+        tree = build_tree(
             actx, sources, targets=targets, target_radii=target_radii,
             stick_out_factor=0.15, max_particles_in_box=30, debug=True
         )

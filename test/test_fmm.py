@@ -203,10 +203,8 @@ def test_fmm_completeness(actx_factory, dims, nsources_req, ntargets_req,
     else:
         target_radii = None
 
-    from boxtree import TreeBuilder
-    tb = TreeBuilder(actx)
-
-    tree, _ = tb(actx, sources, targets=targets,
+    from boxtree import build_tree
+    tree = build_tree(actx, sources, targets=targets,
             max_particles_in_box=30,
             source_radii=source_radii, target_radii=target_radii,
             debug=True, stick_out_factor=0.25, extent_norm=extent_norm)
@@ -406,10 +404,9 @@ def test_pyfmmlib_fmm(actx_factory, dims, use_dipoles, helmholtz_k):
     sources_host = np.stack(actx.to_numpy(sources))
     targets_host = np.stack(actx.to_numpy(targets))
 
-    from boxtree import TreeBuilder
-    tb = TreeBuilder(actx)
-
-    tree, _ = tb(actx, sources, targets=targets,
+    from boxtree import build_tree
+    tree = build_tree(
+            actx, sources, targets=targets,
             max_particles_in_box=30, debug=True)
 
     from boxtree.traversal import build_traversal
@@ -550,10 +547,9 @@ def test_pyfmmlib_numerical_stability(actx_factory, dims, helmholtz_k, order):
 
     targets = sources * (1 + 1e-3)
 
-    from boxtree import TreeBuilder
-    tb = TreeBuilder(actx)
-
-    tree, _ = tb(actx, sources, targets=targets,
+    from boxtree import build_tree
+    tree = build_tree(
+            actx, sources, targets=targets,
             max_particles_in_box=2, debug=True)
 
     assert tree.nlevels >= 15
@@ -633,13 +629,15 @@ def test_interaction_list_particle_count_thresholding(actx_factory, enable_exten
     else:
         target_radii = None
 
-    from boxtree import TreeBuilder
-    tb = TreeBuilder(actx)
-
-    tree, _ = tb(actx, sources, targets=targets,
+    from boxtree import build_tree
+    tree = build_tree(
+            actx, sources,
+            targets=targets,
             max_particles_in_box=max_particles_in_box,
             target_radii=target_radii,
-            debug=True, stick_out_factor=0.25)
+            stick_out_factor=0.25,
+            debug=True,
+            )
 
     from boxtree.traversal import build_traversal
     trav = build_traversal(actx, tree,
@@ -688,13 +686,15 @@ def test_fmm_float32(actx_factory, enable_extents):
     else:
         target_radii = None
 
-    from boxtree import TreeBuilder
-    tb = TreeBuilder(actx)
-
-    tree, _ = tb(actx, sources, targets=targets,
+    from boxtree import build_tree
+    tree = build_tree(
+            actx, sources,
+            targets=targets,
             max_particles_in_box=30,
             target_radii=target_radii,
-            debug=True, stick_out_factor=0.25)
+            stick_out_factor=0.25,
+            debug=True,
+            )
 
     from boxtree.traversal import build_traversal
     trav = build_traversal(actx, tree, debug=True)
@@ -733,10 +733,9 @@ def test_fmm_with_optimized_3d_m2l(actx_factory, nsrcntgts, helmholtz_k,
             p_normal(actx, ntargets, dims, dtype, seed=18)
             + np.array([2, 0, 0])[:dims])
 
-    from boxtree import TreeBuilder
-    tb = TreeBuilder(actx)
-
-    tree, _ = tb(actx, sources, targets=targets,
+    from boxtree import build_tree
+    tree = build_tree(
+            actx, sources, targets=targets,
             max_particles_in_box=30, debug=True)
 
     from boxtree.traversal import build_traversal

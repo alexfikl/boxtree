@@ -99,9 +99,8 @@ def _test_against_shared(
             target_radii = rng.uniform(0.0, 0.05, (ntargets,))
 
             # Build the tree and interaction lists
-            from boxtree import TreeBuilder
-            tb = TreeBuilder(actx)
-            global_tree_dev, _ = tb(
+            from boxtree import build_tree
+            global_tree_dev = build_tree(
                 actx, sources, targets=targets, target_radii=target_radii,
                 stick_out_factor=0.25, max_particles_in_box=30, debug=True)
 
@@ -250,10 +249,10 @@ def _test_constantone(tmp_cache_basedir, dims, nsources, ntargets, dtype):
             sources_weights = np.ones((nsources,), dtype=dtype)
 
             # Build the global tree
-            from boxtree import TreeBuilder
-            tb = TreeBuilder(actx)
-            tree, _ = tb(actx, sources, targets=targets, max_particles_in_box=30,
-                        debug=True)
+            from boxtree import build_tree
+            tree = build_tree(
+                    actx, sources,
+                    targets=targets, max_particles_in_box=30, debug=True)
             tree = actx.to_numpy(tree)
 
         tree_indep = ConstantOneTreeIndependentDataForWrangler()

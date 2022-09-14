@@ -69,9 +69,8 @@ def test_compare_cl_and_py_cost_model(actx_factory, nsources, ntargets, dims, dt
 
     # {{{ Generate tree and traversal
 
-    from boxtree import TreeBuilder
-    tb = TreeBuilder(actx)
-    tree, _ = tb(
+    from boxtree import build_tree
+    tree = build_tree(
         actx, sources, targets=targets, target_radii=target_radii,
         stick_out_factor=0.15, max_particles_in_box=30, debug=True
     )
@@ -407,9 +406,8 @@ def test_estimate_calibration_params(actx_factory):
 
         # {{{ Generate tree and traversal
 
-        from boxtree import TreeBuilder
-        tb = TreeBuilder(actx)
-        tree, _ = tb(
+        from boxtree import build_tree
+        tree = build_tree(
             actx, sources, targets=targets, target_radii=target_radii,
             stick_out_factor=0.15, max_particles_in_box=30, debug=True
         )
@@ -537,9 +535,8 @@ def test_cost_model_op_counts_agree_with_constantone_wrangler(
     rng = np.random.default_rng(20)
     target_radii = rng.uniform(0, 0.04, (ntargets,)).astype(dtype)
 
-    from boxtree import TreeBuilder
-    tb = TreeBuilder(actx)
-    tree, _ = tb(
+    from boxtree import build_tree
+    tree = build_tree(
         actx, sources, targets=targets, target_radii=target_radii,
         stick_out_factor=0.15, max_particles_in_box=30, debug=True
     )

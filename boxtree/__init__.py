@@ -21,22 +21,22 @@ THE SOFTWARE.
 """
 
 from boxtree.tree import Tree, TreeWithLinkedPointSources, box_flags_enum
-from boxtree.tree_build import TreeBuilder
+from boxtree.tree_build import TreeBuilder, build_tree
 
 __all__ = [
     "Tree", "TreeWithLinkedPointSources",
-    "TreeBuilder", "box_flags_enum"]
+    "TreeBuilder", "build_tree", "box_flags_enum"]
 
 __doc__ = r"""
 :mod:`boxtree` can do three main things:
 
 * it can sort particles into an adaptively refined quad/octree,
-  see :class:`boxtree.Tree` and :class:`boxtree.TreeBuilder`.
+  see :class:`boxtree.Tree` and :class:`boxtree.build_tree`.
 
 * it can compute fast-multipole-like interaction lists on this tree structure,
-  see :mod:`boxtree.traversal`. Note that while this traversal generation
-  builds on the result of particle sorting,
-  it is completely distinct in the software sense.
+  see :mod:`boxtree.traversal`. Note that, while this traversal generation
+  builds on the result of particle sorting, it is completely distinct in the
+  software sense.
 
 * It can compute geometric lookup structures based on a :class:`boxtree.Tree`,
   see :mod:`boxtree.area_query`.
@@ -48,16 +48,16 @@ Tree modes
 
 * one where no distinction is made between sources and targets. In this mode,
   all participants in the interaction are called 'particles'.
-  (``targets is None`` in the call to :meth:`boxtree.TreeBuilder.__call__`)
+  (``targets`` is *None* in the call to :meth:`boxtree.build_tree`)
 
 * one where a distinction between sources and targets is made.
-  (``targets is not None`` in the call to :meth:`boxtree.TreeBuilder.__call__`)
+  (``targets`` is not *None* in the call to :meth:`boxtree.build_tree`)
 
 * one where a distinction between sources and targets is made,
   and where sources and/or targets are considered to have an extent, given by an
-  :math:`l^\infty` radius.
-  (``targets is not None`` and ``source_radii is not None or target_radii is
-  not None`` in the call to :meth:`boxtree.TreeBuilder.__call__`)
+  :math:`\ell^p` radius.
+  (``targets`` is not *None* and ``source_radii`` is not *None* or *target_radii*
+  is not *None* in the call to :meth:`boxtree.build_tree`)
 
   If sources have an extent, it is possible to 'link' each source with a number
   of point sources. For this case, it is important to internalize this bit of
@@ -69,9 +69,8 @@ Sources and targets with extent
 -------------------------------
 
 :attr:`Tree.source_radii` and :attr:`Tree.target_radii` specify the
-radii of of :math:`l^\infty` 'circles' (that is, squares) centered at
-:attr:`Tree.sources` and :attr:`Tree.targets` that contain the entire
-extent of that source or target.
+radii of of :math:`\ell^p` 'circles' centered at :attr:`Tree.sources` and
+:attr:`Tree.targets` that contain the entire extent of that source or target.
 
 :mod:`boxtree.traversal` guarantees that, in generating traversals, all
 interactions to targets within the source extent and from sources within the
@@ -89,9 +88,9 @@ There are four particle orderings:
 * **user target order**
 * **tree target order** (tree/box-sorted)
 
-:attr:`Tree.user_source_ids` helps translate source arrays into
-tree order for processing. :attr:`Tree.sorted_target_ids`
-helps translate potentials back into user target order for output.
+:attr:`Tree.user_source_ids` helps translate source arrays into tree order for
+processing. :attr:`Tree.sorted_target_ids` helps translate potentials back into
+user target order for output.
 
 If each 'original' source above is linked to a number of point sources,
 the point sources have their own orderings:
@@ -107,10 +106,9 @@ translate point source arrays into tree order for processing.
 CSR-like interaction list storage
 ---------------------------------
 
-Many list-like data structures in :mod:`boxtree` consists of
-two arrays, one whose name ends in ``_starts``, and another whose
-name ends in ``_lists``. For example,
-suppose we would like to find the colleagues of box #17 using
+Many list-like data structures in :mod:`boxtree` consists of two arrays, one
+whose name ends in ``_starts``, and another whose name ends in ``_lists``. For
+example, suppose we would like to find the colleagues of box #17 using
 :attr:`boxtree.traversal.FMMTraversalInfo.same_level_non_well_sep_boxes_starts`
 and
 :attr:`boxtree.traversal.FMMTraversalInfo.same_level_non_well_sep_boxes_lists`.
@@ -124,7 +122,7 @@ The following snippet of code achieves this::
 This indexing scheme has the following properties:
 
 * If the underlying indexing array (say the list of all boxes) has *n* entries,
-  then the ``_starts`` array has *n+1* entries. The very last entry determines
+  then the ``_starts`` array has *n + 1* entries. The very last entry determines
   the length of the last list.
 
 * The lists in ``_lists`` are stored contiguously. The start of the next list

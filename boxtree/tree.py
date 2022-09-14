@@ -122,7 +122,7 @@ class Tree:
     into which they may be sorted.
 
     Instances of this class are not constructed directly. They are returned
-    by :meth:`TreeBuilder.__call__`.
+    by :meth:`~boxtree.build_tree`.
 
     .. rubric:: Flags
 

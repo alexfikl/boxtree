@@ -26,9 +26,8 @@ particles = make_obj_array([
 # -----------------------------------------------------------------------------
 # build tree and traversals (lists)
 # -----------------------------------------------------------------------------
-from boxtree import TreeBuilder
-tb = TreeBuilder(actx)
-tree, _ = tb(actx, particles, max_particles_in_box=5)
+from boxtree import build_tree
+tree = build_tree(actx, particles, max_particles_in_box=5)
 
 from boxtree.traversal import build_traversal
 trav = build_traversal(actx, tree)

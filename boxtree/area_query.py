@@ -453,13 +453,13 @@ class AreaQueryElementwiseTemplate:
                  dimensions, coord_dtype, box_id_dtype,
                  peer_list_idx_dtype, max_levels,
                  extra_var_values=(), extra_type_aliases=(),
-                 extra_preamble=""):
+                 extra_preamble="",
+                 root_extent_stretch_factor=1.0e-4):
         from pyopencl.tools import dtype_to_ctype
 
         from boxtree import box_flags_enum
         from boxtree.tools import AXIS_NAMES
         from boxtree.traversal import TRAVERSAL_PREAMBLE_TYPEDEFS_AND_DEFINES
-        from boxtree.tree_build import TreeBuilder
 
         from pyopencl.cltypes import vec_types
         render_vars = (
@@ -476,7 +476,7 @@ class AreaQueryElementwiseTemplate:
             ("box_flags_enum", box_flags_enum),
             ("peer_list_idx_dtype", peer_list_idx_dtype),
             ("debug", False),
-            ("root_extent_stretch_factor", TreeBuilder.ROOT_EXTENT_STRETCH_FACTOR),
+            ("root_extent_stretch_factor", root_extent_stretch_factor),
 
             # FIXME This gets used in pytential with a template that still uses this:
             ("vec_types", tuple(vec_types.items())),
@@ -595,7 +595,8 @@ class AreaQueryResult:
 
 def build_area_query(
         actx: PyOpenCLArrayContext, tree: Tree,
-        ball_centers, ball_radii, peer_lists=None) -> AreaQueryResult:
+        ball_centers, ball_radii, peer_lists=None,
+        root_extent_stretch_factor: float = 1.0e-4) -> AreaQueryResult:
     r"""Given a set of :math:`l^\infty` "balls", this class helps build a
     look-up table from ball to leaf boxes that intersect with the ball.
 
@@ -643,7 +644,6 @@ def build_area_query(
         from boxtree import box_flags_enum
         from boxtree.tools import AXIS_NAMES
         from boxtree.traversal import TRAVERSAL_PREAMBLE_TEMPLATE
-        from boxtree.tree_build import TreeBuilder
 
         logger.debug("start building area query kernel")
 
@@ -667,7 +667,7 @@ def build_area_query(
             peer_list_idx_dtype=peer_list_idx_dtype,
             ball_id_dtype=ball_id_dtype,
             debug=False,
-            root_extent_stretch_factor=TreeBuilder.ROOT_EXTENT_STRETCH_FACTOR)
+            root_extent_stretch_factor=root_extent_stretch_factor)
 
         from boxtree.tools import VectorArg, ScalarArg
         arg_decls = [
@@ -878,7 +878,8 @@ class SpaceInvaderQueryBuilder:
 
 def build_space_invader_query(
         actx: PyOpenCLArrayContext, tree: Tree,
-        ball_centers, ball_radii, peer_lists=None) -> Array:
+        ball_centers, ball_radii, peer_lists=None,
+        root_extent_stretch_factor: float = 1.0e-4) -> Array:
     r"""
     Given a set of :math:`l^\infty` "balls", this class helps build a look-up
     table which maps leaf boxes to the *outer space invader distance*.
@@ -947,7 +948,8 @@ def build_space_invader_query(
                 tree.coord_dtype,
                 tree.box_id_dtype,
                 peer_lists.peer_list_starts.dtype,
-                max_levels)
+                max_levels,
+                root_extent_stretch_factor=root_extent_stretch_factor)
 
     space_invader_query_kernel = get_space_invader_query_kernel()
 

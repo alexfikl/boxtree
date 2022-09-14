@@ -29,7 +29,7 @@ from mpi4py import MPI
 from pyopencl.tools import dtype_to_ctype
 from pyopencl.elementwise import ElementwiseKernel
 
-from pytools import memoize_method
+from pytools import memoize_method, memoize_in
 from mako.template import Template
 
 from boxtree.distributed import MPITags
@@ -194,35 +194,41 @@ class DistributedExpansionWranglerMixin:
 
                 mpole_updates_start = mpole_updates_end
 
-    @memoize_method
-    def find_boxes_used_by_subrange_kernel(self, box_id_dtype):
-        return ElementwiseKernel(
-            self.context,
-            Template(r"""
-                ${box_id_t} *contributing_boxes_list,
-                int subrange_start,
-                int subrange_end,
-                ${box_id_t} *box_to_user_rank_starts,
-                int *box_to_user_rank_lists,
-                char *box_in_subrange
-            """).render(
-                box_id_t=dtype_to_ctype(box_id_dtype),
-            ),
-            Template(r"""
-                ${box_id_t} ibox = contributing_boxes_list[i];
-                ${box_id_t} iuser_start = box_to_user_rank_starts[ibox];
-                ${box_id_t} iuser_end = box_to_user_rank_starts[ibox + 1];
-                for(${box_id_t} iuser = iuser_start; iuser < iuser_end; iuser++) {
-                    int useri = box_to_user_rank_lists[iuser];
-                    if(subrange_start <= useri && useri < subrange_end) {
-                        box_in_subrange[i] = 1;
+    def find_boxes_used_by_subrange_kernel(
+            self, actx: PyOpenCLArrayContext, box_id_dtype):
+        @memoize_in(actx, (
+            DistributedExpansionWranglerMixin.find_boxes_used_by_subrange,
+            box_id_dtype))
+        def get_kernel():
+            return ElementwiseKernel(
+                actx.context,
+                Template(r"""
+                    ${box_id_t} *contributing_boxes_list,
+                    int subrange_start,
+                    int subrange_end,
+                    ${box_id_t} *box_to_user_rank_starts,
+                    int *box_to_user_rank_lists,
+                    char *box_in_subrange
+                """).render(
+                    box_id_t=dtype_to_ctype(box_id_dtype),
+                ),
+                Template(r"""
+                    ${box_id_t} ibox = contributing_boxes_list[i];
+                    ${box_id_t} iuser_start = box_to_user_rank_starts[ibox];
+                    ${box_id_t} iuser_end = box_to_user_rank_starts[ibox + 1];
+                    for(${box_id_t} iuser = iuser_start; iuser < iuser_end; iuser++) {
+                        int useri = box_to_user_rank_lists[iuser];
+                        if(subrange_start <= useri && useri < subrange_end) {
+                            box_in_subrange[i] = 1;
+                        }
                     }
-                }
-            """).render(
-                box_id_t=dtype_to_ctype(box_id_dtype)
-            ),
-            "find_boxes_used_by_subrange"
-        )
+                """).render(    # noqa: E501
+                    box_id_t=dtype_to_ctype(box_id_dtype)
+                ),
+                "find_boxes_used_by_subrange"
+            )
+
+        return get_kernel()
 
     def find_boxes_used_by_subrange(
             self, actx: PyOpenCLArrayContext,
@@ -243,7 +249,7 @@ class DistributedExpansionWranglerMixin:
         """
         box_in_subrange = actx.zeros(contributing_boxes_list.shape[0], dtype=np.int8)
         knl = self.find_boxes_used_by_subrange_kernel(
-                self.traversal.tree.box_id_dtype)
+                actx, self.traversal.tree.box_id_dtype)
 
         knl(
             contributing_boxes_list,

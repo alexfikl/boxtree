@@ -917,12 +917,11 @@ def filter_target_lists_in_user_order(
             )
 
     kernel = get_kernel()
-    result, evt = kernel(actx.queue, tree.nboxes,
+    result, _ = kernel(actx.queue, tree.nboxes,
             user_order_flags,
             user_target_ids,
             tree.box_target_starts,
             tree.box_target_counts_nonchild)
-    result.add_event(evt)
 
     target_lists = FilteredTargetListsInUserOrder(
             nfiltered_targets=result["filt_tgt_list"].count,

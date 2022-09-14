@@ -234,8 +234,9 @@ def test_fmm_completeness(actx_factory, dims, nsources_req, ntargets_req,
     if who_has_extent:
         pre_merge_host_trav = actx.to_numpy(pre_merge_trav)
 
-    from boxtree.tree import ParticleListFilter
-    plfilt = ParticleListFilter(actx)
+    from boxtree.tree import (
+        filter_target_lists_in_user_order,
+        filter_target_lists_in_tree_order)
 
     tree_indep = ConstantOneTreeIndependentDataForWrangler()
 
@@ -245,14 +246,12 @@ def test_fmm_completeness(actx_factory, dims, nsources_req, ntargets_req,
                 )
 
         if filter_kind == "user":
-            filtered_targets = plfilt.filter_target_lists_in_user_order(
-                    actx, tree, flags)
+            filtered_targets = filter_target_lists_in_user_order(actx, tree, flags)
             wrangler = ConstantOneExpansionWranglerWithFilteredTargetsInUserOrder(
                     tree_indep, host_trav,
                     actx.to_numpy(filtered_targets))
         elif filter_kind == "tree":
-            filtered_targets = plfilt.filter_target_lists_in_tree_order(
-                    actx, tree, flags)
+            filtered_targets = filter_target_lists_in_tree_order(actx, tree, flags)
             wrangler = ConstantOneExpansionWranglerWithFilteredTargetsInTreeOrder(
                     tree_indep, host_trav,
                     actx.to_numpy(filtered_targets))

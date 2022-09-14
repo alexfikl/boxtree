@@ -1046,7 +1046,8 @@ def filter_target_lists_in_tree_order(
     nfiltered_targets = actx.empty(1, tree.particle_id_dtype)
 
     scan_knl, index_knl = get_kernels()
-    scan_knl(tree_order_flags,
+    scan_knl(
+            tree_order_flags,
             filtered_from_unfiltered_target_indices,
             unfiltered_from_filtered_target_indices,
             nfiltered_targets,

@@ -262,6 +262,7 @@ def construct_local_particles_and_lists(
             *local_particles,
             queue=actx.queue,
             allocator=actx.allocator,
+            )
 
     # {{{ construct the list of list indices
 

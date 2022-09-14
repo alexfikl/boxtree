@@ -83,7 +83,7 @@ import numpy as np
 
 from cgen import Enum
 from arraycontext import Array
-from pytools import memoize_method
+from pytools import memoize_method, memoize_in
 
 from boxtree.array_context import PyOpenCLArrayContext, dataclass_array_container
 
@@ -646,18 +646,21 @@ def link_point_sources(
     tree_order_point_source_counts = actx.empty(
             tree.nsources, tree.particle_id_dtype)
 
-    from boxtree.tree_build_kernels import POINT_SOURCE_LINKING_SOURCE_SCAN_TPL
-    knl = POINT_SOURCE_LINKING_SOURCE_SCAN_TPL.build(
-        actx.queue.context,
-        type_aliases=(
-            ("scan_t", tree.particle_id_dtype),
-            ("index_t", tree.particle_id_dtype),
-            ("particle_id_t", tree.particle_id_dtype),
-            ),
-        )
+    @memoize_in(actx, (link_point_sources, tree.particle_id_dtype))
+    def get_point_source_linking_source_scan_knl():
+        from boxtree.tree_build_kernels import POINT_SOURCE_LINKING_SOURCE_SCAN_TPL
+        return POINT_SOURCE_LINKING_SOURCE_SCAN_TPL.build(
+            actx.queue.context,
+            type_aliases=(
+                ("scan_t", tree.particle_id_dtype),
+                ("index_t", tree.particle_id_dtype),
+                ("particle_id_t", tree.particle_id_dtype),
+                ),
+            )
 
     logger.debug("point source linking: tree order source scan")
 
+    knl = get_point_source_linking_source_scan_knl()
     knl(point_source_starts, tree.user_source_ids,
             tree_order_point_source_starts, tree_order_point_source_counts,
             npoint_sources_dev, size=tree.nsources, queue=actx.queue)
@@ -698,19 +701,21 @@ def link_point_sources(
             dest_indices=tree_order_point_source_starts,
             out=[source_boundaries])
 
-    from boxtree.tree_build_kernels import \
-            POINT_SOURCE_LINKING_USER_POINT_SOURCE_ID_SCAN_TPL
+    @memoize_in(actx, (link_point_sources, tree.particle_id_dtype))
+    def get_point_source_linking_user_point_source_id_scan_knl():
+        from boxtree.tree_build_kernels import (
+                POINT_SOURCE_LINKING_USER_POINT_SOURCE_ID_SCAN_TPL)
+        return POINT_SOURCE_LINKING_USER_POINT_SOURCE_ID_SCAN_TPL.build(
+            actx.queue.context,
+            type_aliases=(
+                ("scan_t", tree.particle_id_dtype),
+                ("index_t", tree.particle_id_dtype),
+                ("particle_id_t", tree.particle_id_dtype),
+                ),
+            )
 
     logger.debug("point source linking: point source id scan")
-
-    knl = POINT_SOURCE_LINKING_USER_POINT_SOURCE_ID_SCAN_TPL.build(
-        actx.queue.context,
-        type_aliases=(
-            ("scan_t", tree.particle_id_dtype),
-            ("index_t", tree.particle_id_dtype),
-            ("particle_id_t", tree.particle_id_dtype),
-            ),
-        )
+    knl = get_point_source_linking_user_point_source_id_scan_knl()
     knl(source_boundaries, user_point_source_ids,
             size=npoint_sources, queue=actx.queue)
 
@@ -729,15 +734,17 @@ def link_point_sources(
 
     # {{{ compute box point source metadata
 
-    from boxtree.tree_build_kernels import POINT_SOURCE_LINKING_BOX_POINT_SOURCES
-
-    knl = POINT_SOURCE_LINKING_BOX_POINT_SOURCES.build(
-        actx.queue.context,
-        type_aliases=(
-            ("particle_id_t", tree.particle_id_dtype),
-            ("box_id_t", tree.box_id_dtype),
-            ),
-        )
+    @memoize_in(actx, (
+        link_point_sources, tree.particle_id_dtype, tree.box_id_dtype))
+    def get_point_source_linking_box_point_sources_knl():
+        from boxtree.tree_build_kernels import POINT_SOURCE_LINKING_BOX_POINT_SOURCES
+        return POINT_SOURCE_LINKING_BOX_POINT_SOURCES.build(
+            actx.queue.context,
+            type_aliases=(
+                ("particle_id_t", tree.particle_id_dtype),
+                ("box_id_t", tree.box_id_dtype),
+                ),
+            )
 
     logger.debug("point source linking: box point sources")
 
@@ -746,6 +753,7 @@ def link_point_sources(
     box_point_source_counts_nonchild = actx.empty(
             tree.nboxes, tree.particle_id_dtype)
 
+    knl = get_point_source_linking_box_point_sources_knl()
     knl(
             box_point_source_starts, box_point_source_counts_nonchild,
             box_point_source_counts_cumul,

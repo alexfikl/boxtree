@@ -32,7 +32,7 @@ from arraycontext import Array
 from pytools import memoize_on_first_arg
 from mako.template import Template
 
-from boxtree.array_context import PyOpenCLArrayContext
+from boxtree.array_context import PyOpenCLArrayContext, dataclass_array_container
 
 
 # {{{ kernels
@@ -292,6 +292,7 @@ def get_multipole_src_boxes_mask(
     return multipole_boxes_mask
 
 
+@dataclass_array_container
 @dataclass(frozen=True)
 class BoxMasks:
     """

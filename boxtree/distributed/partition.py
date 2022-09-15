@@ -344,12 +344,10 @@ def get_box_masks(actx, traversal, responsible_boxes_list):
     multipole_src_boxes_mask = get_multipole_src_boxes_mask(
         actx, traversal, responsible_boxes_mask, ancestor_boxes_mask)
 
-    masks = BoxMasks(
+    return BoxMasks(
         responsible_boxes_mask,
         ancestor_boxes_mask,
         point_src_boxes_mask,
         multipole_src_boxes_mask)
-
-    return actx.freeze(masks)
 
 # }}}

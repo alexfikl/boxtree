@@ -205,7 +205,6 @@ def construct_local_particles_and_lists(
         box_particle_counts_nonchild,
         particle_mask,
         queue=actx.queue,
-        allocator=actx.allocator,
         )
 
     # }}}
@@ -239,8 +238,6 @@ def construct_local_particles_and_lists(
     knl = fetch_local_particles_kernel(
         actx, dimensions, particle_id_dtype, coord_dtype,
         particles_have_extent=particles_have_extent,
-        queue=actx.queue,
-        allocator=actx.allocator,
         )
 
     if particles_have_extent:
@@ -252,7 +249,6 @@ def construct_local_particles_and_lists(
             global_particle_radii,
             local_particle_radii,
             queue=actx.queue,
-            allocator=actx.allocator,
             )
     else:
         local_particle_radii = None
@@ -261,7 +257,6 @@ def construct_local_particles_and_lists(
             *global_particles.tolist(),
             *local_particles,
             queue=actx.queue,
-            allocator=actx.allocator,
             )
 
     # {{{ construct the list of list indices
@@ -323,7 +318,8 @@ class LocalTree(Tree):
 
 def generate_local_tree(
         actx: PyOpenCLArrayContext,
-        global_traversal, responsible_boxes_list, comm):
+        global_traversal, responsible_boxes_list, comm,
+        root_extent_stretch_factor: float = 1.0e-4) -> LocalTree:
     """Generate the local tree for the current rank.
 
     This is an MPI-collective routine on *comm*.
@@ -423,7 +419,6 @@ def generate_local_tree(
         local_targets_and_lists.box_particle_counts_cumul,
         local_box_flags,
         queue=actx.queue,
-        allocator=actx.allocator,
         )
 
     # }}}
@@ -481,6 +476,7 @@ def generate_local_tree(
         box_target_bounding_box_min=global_tree.box_target_bounding_box_min,
         box_target_bounding_box_max=global_tree.box_target_bounding_box_max,
 
+        root_extent_stretch_factor=root_extent_stretch_factor,
         _is_pruned=global_tree._is_pruned,
 
         responsible_boxes_list=responsible_boxes_list,

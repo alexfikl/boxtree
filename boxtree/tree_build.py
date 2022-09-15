@@ -82,7 +82,7 @@ class TreeBuilder:
             extent_norm=extent_norm, bbox=bbox,
             morton_nr_dtype=self.morton_nr_dtype,
             box_level_dtype=self.box_level_dtype,
-            root_extent_stretch_factor=self.ROOT_EXTENT_STRETCH_FACTOR,
+            root_extent_stretch_factor=TreeBuilder.ROOT_EXTENT_STRETCH_FACTOR,
             debug=debug, **kwargs)
 
 
@@ -1696,6 +1696,7 @@ def build_tree(
             box_target_bounding_box_min=box_target_bounding_box_min,
             box_target_bounding_box_max=box_target_bounding_box_max,
 
+            root_extent_stretch_factor=root_extent_stretch_factor,
             _is_pruned=prune_empty_leaves,
 
             **extra_tree_attrs

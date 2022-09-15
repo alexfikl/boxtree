@@ -437,6 +437,7 @@ class Tree:
     box_target_bounding_box_min: Array
     box_target_bounding_box_max: Array
 
+    root_extent_stretch_factor: float
     _is_pruned: bool
 
     @property

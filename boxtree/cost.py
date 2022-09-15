@@ -769,7 +769,6 @@ class FMMCostModel(AbstractFMMCostModel):
             tree.box_levels,
             p2m_cost,
             queue=actx.queue,
-            allocator=actx.allocator,
         )
 
         return np2m
@@ -845,7 +844,6 @@ class FMMCostModel(AbstractFMMCostModel):
             nm2m,
             *tree.box_child_ids,
             queue=actx.queue,
-            allocator=actx.allocator,
         )
 
         return self.aggregate_over_boxes(actx, nm2m)
@@ -918,7 +916,6 @@ class FMMCostModel(AbstractFMMCostModel):
             traversal.neighbor_source_boxes_lists,
             tree.box_source_counts_nonchild,
             queue=actx.queue,
-            allocator=actx.allocator,
         )
 
         # List 3 close
@@ -930,7 +927,6 @@ class FMMCostModel(AbstractFMMCostModel):
                 traversal.from_sep_close_smaller_lists,
                 tree.box_source_counts_nonchild,
                 queue=actx.queue,
-                allocator=actx.allocator,
             )
 
         # List 4 close
@@ -942,7 +938,6 @@ class FMMCostModel(AbstractFMMCostModel):
                 traversal.from_sep_close_bigger_lists,
                 tree.box_source_counts_nonchild,
                 queue=actx.queue,
-                allocator=actx.allocator,
             )
 
         return ndirect_sources_by_itgt_box
@@ -1012,7 +1007,6 @@ class FMMCostModel(AbstractFMMCostModel):
             tree.box_levels,
             m2l_cost,
             queue=actx.queue,
-            allocator=actx.allocator,
         )
 
         return nm2l
@@ -1077,7 +1071,6 @@ class FMMCostModel(AbstractFMMCostModel):
                 actx.to_numpy(m2p_cost[ilevel]).reshape(-1)[0],
                 nm2p,
                 queue=actx.queue,
-                allocator=actx.allocator,
             )
 
         return nm2p
@@ -1143,7 +1136,6 @@ class FMMCostModel(AbstractFMMCostModel):
             tree.box_levels,
             p2l_cost,
             queue=actx.queue,
-            allocator=actx.allocator,
         )
 
         return nm2p
@@ -1207,7 +1199,6 @@ class FMMCostModel(AbstractFMMCostModel):
             tree.box_levels,
             l2p_cost,
             queue=actx.queue,
-            allocator=actx.allocator,
         )
 
         return neval_locals

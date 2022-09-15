@@ -657,7 +657,7 @@ def mask_to_csr(actx: PyOpenCLArrayContext, mask, list_dtype=None):
             )
         result["output"].lists.add_event(evt)
 
-        return (result["output"].lists,)
+        return result["output"].lists
     elif len(mask.shape) == 2:
         # FIXME: This is efficient for small column sizes but may not be
         # for larger ones since the work is partitioned by row.

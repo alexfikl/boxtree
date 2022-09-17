@@ -77,7 +77,9 @@ FETCH_LOCAL_PARTICLES_PRG_TPL = Template("""
 
 
 @memoize_on_first_arg
-def particle_mask_kernel(actx: PyOpenCLArrayContext, particle_id_dtype):
+def get_particle_mask_kernel(
+        actx: PyOpenCLArrayContext,
+        particle_id_dtype: "np.dtype"):
     return ElementwiseKernel(
         actx.context,
         arguments=Template("""
@@ -102,7 +104,9 @@ def particle_mask_kernel(actx: PyOpenCLArrayContext, particle_id_dtype):
 
 
 @memoize_on_first_arg
-def mask_scan_kernel(actx: PyOpenCLArrayContext, particle_id_dtype):
+def get_mask_scan_kernel(
+        actx: PyOpenCLArrayContext,
+        particle_id_dtype: "np.dtype"):
     from pyopencl.scan import GenericScanKernel
     return GenericScanKernel(
         actx.context, particle_id_dtype,
@@ -119,10 +123,12 @@ def mask_scan_kernel(actx: PyOpenCLArrayContext, particle_id_dtype):
 
 
 @memoize_on_first_arg
-def fetch_local_particles_kernel(
+def get_fetch_local_particles_kernel(
         actx: PyOpenCLArrayContext,
-        dimensions, particle_id_dtype, coord_dtype,
-        particles_have_extent):
+        dimensions: int,
+        particle_id_dtype: "np.dtype",
+        coord_dtype: "np.dtype",
+        particles_have_extent: bool):
     return ElementwiseKernel(
         actx.context,
         FETCH_LOCAL_PARTICLES_ARGUMENTS_TPL.render(
@@ -140,7 +146,9 @@ def fetch_local_particles_kernel(
 
 
 @memoize_on_first_arg
-def modify_target_flags_kernel(actx: PyOpenCLArrayContext, particle_id_dtype):
+def get_modify_target_flags_kernel(
+        actx: PyOpenCLArrayContext,
+        particle_id_dtype: "np.dtype"):
     from boxtree import box_flags_enum
     box_flag_t = dtype_to_ctype(box_flags_enum.dtype)
 
@@ -199,7 +207,7 @@ def construct_local_particles_and_lists(
     # {{{ calculate the particle mask
 
     particle_mask = actx.zeros(num_global_particles, dtype=particle_id_dtype)
-    knl = particle_mask_kernel(actx, particle_id_dtype)
+    knl = get_particle_mask_kernel(actx, particle_id_dtype)
     knl(box_mask,
         box_particle_starts,
         box_particle_counts_nonchild,
@@ -215,7 +223,7 @@ def construct_local_particles_and_lists(
         num_global_particles + 1, dtype=particle_id_dtype)
 
     global_to_local_particle_index[0] = 0
-    knl = mask_scan_kernel(actx, particle_id_dtype)
+    knl = get_mask_scan_kernel(actx, particle_id_dtype)
     knl(particle_mask, global_to_local_particle_index,
         queue=actx.queue,
         allocator=actx.allocator,
@@ -235,7 +243,7 @@ def construct_local_particles_and_lists(
     from pytools.obj_array import make_obj_array
     local_particles = make_obj_array(local_particles)
 
-    knl = fetch_local_particles_kernel(
+    knl = get_fetch_local_particles_kernel(
         actx, dimensions, particle_id_dtype, coord_dtype,
         particles_have_extent=particles_have_extent,
         )
@@ -413,7 +421,7 @@ def generate_local_tree(
     # could result in incomplete interaction lists.
 
     local_box_flags = actx.np.copy(global_tree.box_flags)
-    knl = modify_target_flags_kernel(actx, global_tree.particle_id_dtype)
+    knl = get_modify_target_flags_kernel(actx, global_tree.particle_id_dtype)
     knl(
         local_targets_and_lists.box_particle_counts_nonchild,
         local_targets_and_lists.box_particle_counts_cumul,

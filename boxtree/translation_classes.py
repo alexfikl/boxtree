@@ -35,7 +35,7 @@ import numpy as np
 from pyopencl.elementwise import ElementwiseTemplate
 
 from arraycontext import Array
-from pytools import memoize_in, log_process
+from pytools import memoize_on_first_arg, log_process
 from mako.template import Template
 
 from boxtree.tree import Tree
@@ -266,6 +266,49 @@ def translation_class_to_normalized_vector(
     return result
 
 
+@memoize_on_first_arg
+def get_translation_class_finder_kernel(
+        actx: PyOpenCLArrayContext,
+        dimensions: int,
+        well_sep_is_n_away: int,
+        box_id_dtype: "np.dtype",
+        box_level_dtype: "np.dtype",
+        coord_dtype: "np.dtype",
+        is_translation_per_level: bool
+        ):
+    coord_vec_dtype = get_coord_vec_dtype(coord_dtype, dimensions)
+    int_coord_vec_dtype = get_coord_vec_dtype(np.dtype(np.int32), dimensions)
+
+    num_translation_classes = (
+        ntranslation_classes_per_level(well_sep_is_n_away, dimensions))
+
+    # Make sure translation classes can fit inside a 32 bit integer.
+    if not num_translation_classes <= 1 + np.iinfo(np.int32).max:
+        raise ValueError("would overflow")
+
+    preamble = TRANSLATION_CLASS_FINDER_PREAMBLE_TEMPLATE.render(
+            dimensions=dimensions,
+            cvec_sub=partial(coord_vec_subscript_code, dimensions))
+
+    return TRANSLATION_CLASS_FINDER_TEMPLATE.build(
+        actx.context,
+        type_aliases=(
+            ("int_coord_vec_t", int_coord_vec_dtype),
+            ("coord_vec_t", coord_vec_dtype),
+            ("coord_t", coord_dtype),
+            ("box_id_t", box_id_dtype),
+            ("box_level_t", box_level_dtype),
+        ),
+        var_values=(
+            ("dimensions", dimensions),
+            ("ntranslation_classes_per_level", num_translation_classes),
+            ("translation_class_per_level", is_translation_per_level),
+            ("cvec_sub", partial(
+                coord_vec_subscript_code, dimensions)),
+        ),
+        more_preamble=preamble)
+
+
 def compute_used_translation_classes(
         actx: PyOpenCLArrayContext, trav: FMMTraversalInfo, tree: Tree, *,
         is_translation_per_level: bool):
@@ -281,49 +324,18 @@ def compute_used_translation_classes(
     if is_translation_per_level:
         ntranslation_classes = ntranslation_classes * tree.nlevels
 
-    @memoize_in(actx, (
-        compute_used_translation_classes,
-        dimensions, well_sep_is_n_away, tree.box_id_dtype,
-        tree.box_level_dtype, coord_dtype, is_translation_per_level))
-    def get_translation_class_finder_kernel():
-        coord_vec_dtype = get_coord_vec_dtype(coord_dtype, dimensions)
-        int_coord_vec_dtype = get_coord_vec_dtype(np.dtype(np.int32), dimensions)
-
-        num_translation_classes = (
-            ntranslation_classes_per_level(well_sep_is_n_away, dimensions))
-
-        # Make sure translation classes can fit inside a 32 bit integer.
-        if not num_translation_classes <= 1 + np.iinfo(np.int32).max:
-            raise ValueError("would overflow")
-
-        preamble = TRANSLATION_CLASS_FINDER_PREAMBLE_TEMPLATE.render(
-                dimensions=dimensions,
-                cvec_sub=partial(coord_vec_subscript_code, dimensions))
-
-        return TRANSLATION_CLASS_FINDER_TEMPLATE.build(
-            actx.context,
-            type_aliases=(
-                ("int_coord_vec_t", int_coord_vec_dtype),
-                ("coord_vec_t", coord_vec_dtype),
-                ("coord_t", coord_dtype),
-                ("box_id_t", tree.box_id_dtype),
-                ("box_level_t", tree.box_level_dtype),
-            ),
-            var_values=(
-                ("dimensions", dimensions),
-                ("ntranslation_classes_per_level", num_translation_classes),
-                ("translation_class_per_level", is_translation_per_level),
-                ("cvec_sub", partial(
-                    coord_vec_subscript_code, dimensions)),
-            ),
-            more_preamble=preamble)
-
     translation_classes_lists = actx.empty(
         len(trav.from_sep_siblings_lists), dtype=np.int32)
     translation_class_is_used = actx.zeros(ntranslation_classes, dtype=np.int32)
     error_flag = actx.zeros(1, dtype=np.int32)
 
-    translation_class_finder_knl = get_translation_class_finder_kernel()
+    translation_class_finder_knl = get_translation_class_finder_kernel(
+        actx,
+        dimensions, well_sep_is_n_away,
+        tree.box_id_dtype, tree.box_level_dtype, coord_dtype,
+        is_translation_per_level,
+        )
+
     evt = translation_class_finder_knl(
             trav.from_sep_siblings_lists,
             trav.from_sep_siblings_starts,

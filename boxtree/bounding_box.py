@@ -23,11 +23,13 @@ THE SOFTWARE.
 import numpy as np
 from pyopencl.reduction import ReductionTemplate
 
-from pytools import memoize, memoize_in
+from pytools import memoize, memoize_on_first_arg
 
 from boxtree.tools import get_type_moniker
 from boxtree.array_context import PyOpenCLArrayContext
 
+
+# {{{ kernel template
 
 @memoize
 def make_bounding_box_dtype(device, dimensions, coord_dtype):
@@ -118,53 +120,63 @@ BBOX_REDUCTION_TPL = ReductionTemplate(
             """,
     name_prefix="bounding_box")
 
+# }}}
+
+
+# {{{ find_bounding_box
+
+@memoize_on_first_arg
+def get_bounding_box_kernel(
+        actx: PyOpenCLArrayContext,
+        dimensions: int,
+        coord_dtype: "np.dtype",
+        have_radii: bool):
+    bbox_dtype, bbox_cdecl = make_bounding_box_dtype(
+            actx.queue.device, dimensions, coord_dtype)
+
+    from boxtree.tools import AXIS_NAMES
+    return BBOX_REDUCTION_TPL.build(
+            actx.context,
+            type_aliases=(
+                ("reduction_t", bbox_dtype),
+                ("bbox_t", bbox_dtype),
+                ("coord_t", coord_dtype),
+                ),
+            var_values=(
+                ("axis_names", AXIS_NAMES[:dimensions]),
+                ("dimensions", dimensions),
+                ("coord_dtype", coord_dtype),
+                ("have_radii", have_radii),
+                ("np", np),
+                )
+            )
+
 
 def find_bounding_box(actx: PyOpenCLArrayContext, particles, radii):
+    dev = actx.queue.device
+    if (dev.vendor == "Intel(R) Corporation"
+            and dev.version == "OpenCL 1.2 (Build 56860)"):
+        raise RuntimeError(
+            f"'find_bounding_box' does not work properly with "
+            f"this CL runtime: {dev}")
+
     from pytools import single_valued
     dimensions = len(particles)
     coord_dtype = single_valued(coord.dtype for coord in particles)
     have_radii = radii is not None
-
-    @memoize_in(actx, (
-        find_bounding_box, dimensions, coord_dtype, have_radii))
-    def get_kernel():
-        dev = actx.queue.device
-        if (dev.vendor == "Intel(R) Corporation"
-                and dev.version == "OpenCL 1.2 (Build 56860)"):
-            raise RuntimeError(
-                f"'find_bounding_box' does not work properly with "
-                f"this CL runtime: {dev}")
-
-        bbox_dtype, bbox_cdecl = make_bounding_box_dtype(
-                dev, dimensions, coord_dtype)
-
-        from boxtree.tools import AXIS_NAMES
-        return BBOX_REDUCTION_TPL.build(
-                actx.context,
-                type_aliases=(
-                    ("reduction_t", bbox_dtype),
-                    ("bbox_t", bbox_dtype),
-                    ("coord_t", coord_dtype),
-                    ),
-                var_values=(
-                    ("axis_names", AXIS_NAMES[:dimensions]),
-                    ("dimensions", dimensions),
-                    ("coord_dtype", coord_dtype),
-                    ("have_radii", have_radii),
-                    ("np", np),
-                    )
-                )
 
     if radii is None:
         radii_tuple = ()
     else:
         radii_tuple = (radii,)
 
-    knl = get_kernel()
+    knl = get_bounding_box_kernel(actx, dimensions, coord_dtype, have_radii)
     return knl(
         *(tuple(particles) + radii_tuple),
         queue=actx.queue,
         allocator=actx.allocator,
         )
+
+# }}}
 
 # vim: foldmethod=marker:filetype=pyopencl

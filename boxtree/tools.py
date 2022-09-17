@@ -105,7 +105,7 @@ def make_surface_particle_array(actx, nparticles, dims, dtype, seed=15):
     import loopy as lp
     from boxtree.array_context import make_loopy_program
 
-    @memoize_in(actx, (make_surface_particle_array, dims, dtype))
+    @memoize_in(actx, (make_surface_particle_array, "2d", dtype))
     def get_2d_kernel():
         knl = make_loopy_program(
             "{[i]: 0 <= i < n}",
@@ -126,7 +126,7 @@ def make_surface_particle_array(actx, nparticles, dims, dtype, seed=15):
         knl = lp.split_iname(knl, "i", 128, outer_tag="g.0", inner_tag="l.0")
         return knl
 
-    @memoize_in(actx, (make_surface_particle_array, dims, dtype))
+    @memoize_in(actx, (make_surface_particle_array, "3d", dtype))
     def get_3d_kernel():
         knl = make_loopy_program(
             "{[i, j]: 0 <= i, j <n}",
@@ -169,7 +169,7 @@ def make_uniform_particle_array(actx, nparticles, dims, dtype, seed=15):
     import loopy as lp
     from boxtree.array_context import make_loopy_program
 
-    @memoize_in(actx, (make_uniform_particle_array, dims, dtype))
+    @memoize_in(actx, (make_uniform_particle_array, "2d", dtype))
     def get_2d_kernel():
         knl = make_loopy_program(
             "{[i, j]: 0 <= i, j < n}",
@@ -196,7 +196,7 @@ def make_uniform_particle_array(actx, nparticles, dims, dtype, seed=15):
 
         return knl
 
-    @memoize_in(actx, (make_uniform_particle_array, dims, dtype))
+    @memoize_in(actx, (make_uniform_particle_array, "3d", dtype))
     def get_3d_kernel():
         knl = make_loopy_program(
             "{[i, j, k]: 0 <= i, j, k < n}",
@@ -624,7 +624,7 @@ def mask_to_csr(actx: PyOpenCLArrayContext, mask, list_dtype=None):
     if list_dtype is None:
         list_dtype = mask.dtype
 
-    @memoize_in(actx, (mask_to_csr, mask.dtype, list_dtype))
+    @memoize_in(actx, (mask_to_csr, "list_compressor", mask.dtype, list_dtype))
     def get_list_compressor_kernel():
         return ListOfListsBuilder(
                 actx.context,
@@ -635,7 +635,7 @@ def mask_to_csr(actx: PyOpenCLArrayContext, mask, list_dtype=None):
                 ],
                 name_prefix="compress_list")
 
-    @memoize_in(actx, (mask_to_csr, mask.dtype, list_dtype))
+    @memoize_in(actx, (mask_to_csr, "matrix_compressor", mask.dtype, list_dtype))
     def get_matrix_compressor_kernel():
         return ListOfListsBuilder(
                 actx.context,

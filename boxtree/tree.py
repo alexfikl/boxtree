@@ -703,7 +703,7 @@ def link_point_sources(
 
     @memoize_in(actx, (
         link_point_sources, tree.particle_id_dtype,
-        "point_source_linking_user-point_source_id_scan"))
+        "point_source_linking_user_point_source_id_scan"))
     def get_point_source_linking_user_point_source_id_scan_kernel():
         from boxtree.tree_build_kernels import (
                 POINT_SOURCE_LINKING_USER_POINT_SOURCE_ID_SCAN_TPL)

@@ -34,7 +34,7 @@ from typing import Any, Optional
 
 import numpy as np
 
-from pytools import ProcessLogger, DebugProcessLogger, memoize_in
+from pytools import ProcessLogger, DebugProcessLogger, memoize_on_first_arg
 
 from boxtree.tree import Tree
 from boxtree.array_context import PyOpenCLArrayContext
@@ -87,6 +87,26 @@ class TreeBuilder:
 
 
 # {{{ build_tree
+
+@memoize_on_first_arg
+def get_kernel_info(
+        actx: PyOpenCLArrayContext,
+        dimensions: int,
+        coord_dtype: "np.dtype",
+        particle_id_dtype: "np.dtype",
+        box_id_dtype: "np.dtype",
+        sources_are_targets: bool,
+        srcntgts_extent_norm: str,
+        kind: str,
+        morton_nr_dtype: "np.dtype",
+        box_level_dtype: "np.dtype"):
+    from boxtree.tree_build_kernels import get_tree_build_kernel_info
+    return get_tree_build_kernel_info(actx.context, dimensions, coord_dtype,
+        particle_id_dtype, box_id_dtype,
+        sources_are_targets, srcntgts_extent_norm,
+        morton_nr_dtype, box_level_dtype,
+        kind=kind)
+
 
 def build_tree(
         actx: PyOpenCLArrayContext, particles: np.ndarray, *,
@@ -235,20 +255,15 @@ def build_tree(
 
     # {{{ kernels
 
-    @memoize_in(actx, (
-        build_tree,
-        dimensions, coord_dtype, particle_id_dtype, box_id_dtype,
-        sources_are_targets, srcntgts_extent_norm, kind,
-        morton_nr_dtype, box_level_dtype))
-    def get_kernel_info():
-        from boxtree.tree_build_kernels import get_tree_build_kernel_info
-        return get_tree_build_kernel_info(actx.context, dimensions, coord_dtype,
-            particle_id_dtype, box_id_dtype,
-            sources_are_targets, srcntgts_extent_norm,
-            morton_nr_dtype, box_level_dtype,
-            kind=kind)
-
-    knl_info = get_kernel_info()
+    knl_info = get_kernel_info(
+        actx,
+        dimensions,
+        coord_dtype, particle_id_dtype, box_id_dtype,
+        sources_are_targets,
+        srcntgts_extent_norm,
+        kind,
+        morton_nr_dtype, box_level_dtype,
+        )
 
     # }}}
 

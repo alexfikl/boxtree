@@ -38,7 +38,9 @@ from boxtree.array_context import PyOpenCLArrayContext, dataclass_array_containe
 # {{{ kernels
 
 @memoize_on_first_arg
-def add_interaction_list_boxes_kernel(actx: PyOpenCLArrayContext, box_id_dtype):
+def get_add_interaction_list_boxes_kernel(
+        actx: PyOpenCLArrayContext,
+        box_id_dtype: "np.dtype"):
     """Given a ``responsible_boxes_mask`` and an interaction list, mark source
     boxes for target boxes in ``responsible_boxes_mask`` in a new separate mask.
     """
@@ -69,7 +71,9 @@ def add_interaction_list_boxes_kernel(actx: PyOpenCLArrayContext, box_id_dtype):
 
 
 @memoize_on_first_arg
-def add_parent_boxes_kernel(actx: PyOpenCLArrayContext, box_id_dtype):
+def get_add_parent_boxes_kernel(
+        actx: PyOpenCLArrayContext,
+        box_id_dtype: "np.dtype"):
     return ElementwiseKernel(
         actx.context,
         "__global char *current, __global char *parent, "
@@ -177,7 +181,7 @@ def get_ancestor_boxes_mask(actx, traversal, responsible_boxes_mask):
         is an ancestor of the responsible boxes specified by
         *responsible_boxes_mask*.
     """
-    knl = add_parent_boxes_kernel(actx, traversal.tree.box_id_dtype)
+    knl = get_add_parent_boxes_kernel(actx, traversal.tree.box_id_dtype)
 
     ancestor_boxes = actx.zeros((traversal.tree.nboxes,), dtype=np.int8)
     ancestor_boxes_last = responsible_boxes_mask.copy()
@@ -206,7 +210,7 @@ def get_point_src_boxes_mask(
         souces of box ``i`` are needed for evaluating the potentials of targets
         in boxes represented by *responsible_boxes_mask*.
     """
-    knl = add_interaction_list_boxes_kernel(actx, traversal.tree.box_id_dtype)
+    knl = get_add_interaction_list_boxes_kernel(actx, traversal.tree.box_id_dtype)
     src_boxes_mask = responsible_boxes_mask.copy()
 
     # Add list 1 of responsible boxes
@@ -264,7 +268,7 @@ def get_multipole_src_boxes_mask(
         multipoles of box ``i`` are needed for evaluating the potentials of
         targets in boxes represented by *responsible_boxes_mask*.
     """
-    knl = add_interaction_list_boxes_kernel(actx, traversal.tree.box_id_dtype)
+    knl = get_add_interaction_list_boxes_kernel(actx, traversal.tree.box_id_dtype)
     multipole_boxes_mask = actx.zeros((traversal.tree.nboxes,), dtype=np.int8)
 
     # A mpole is used by process p if it is in the List 2 of either a box

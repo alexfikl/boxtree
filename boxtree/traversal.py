@@ -1667,29 +1667,10 @@ class TraversalKernelInfo:
 
 
 class FMMTraversalBuilder:
-    """
-    .. automethod:: __init__
-    """
-
     def __init__(self,
             array_context: PyOpenCLArrayContext, *,
             well_sep_is_n_away: int = 1,
             from_sep_smaller_crit: Optional[str] = None) -> None:
-        """
-        :arg well_sep_is_n_away: Either An integer 1 or greater.
-            (Only 1 and 2 are tested.)
-            The spacing between boxes that is considered "well-separated" for
-            :attr:`boxtree.traversal.FMMTraversalInfo.from_sep_siblings_starts`
-            (List 2).
-        :arg from_sep_smaller_crit: The criterion used to determine separation
-            box dimensions and separation for
-            :attr:`boxtree.traversal.FMMTraversalInfo.from_sep_smaller_by_level`
-            (List 3). May be one of ``"static_linf"`` (use the box square,
-            possibly enlarged by :attr:`boxtree.Tree.stick_out_factor`),
-            ``"precise_linf"`` (use the precise extent of targets in the box,
-            including their radii), or ``"static_l2"`` (use the circumcircle of
-            the box, possibly enlarged by :attr:`boxtree.Tree.stick_out_factor`).
-        """
         self._setup_actx = array_context
         self.well_sep_is_n_away = well_sep_is_n_away
         self.from_sep_smaller_crit = from_sep_smaller_crit
@@ -1704,7 +1685,7 @@ class FMMTraversalBuilder:
             "Use 'build_traversal' instead.",
             DeprecationWarning, stacklevel=2)
 
-        return build_traversal(actx, tree,
+        result = build_traversal(actx, tree,
             well_sep_is_n_away=self.well_sep_is_n_away,
             from_sep_smaller_crit=self.from_sep_smaller_crit,
             source_boxes_mask=source_boxes_mask,
@@ -1713,6 +1694,8 @@ class FMMTraversalBuilder:
                 _from_sep_smaller_min_nsources_cumul),
             debug=debug,
             )
+
+        return result, None
 
 
 # {{{ traversal kernels
@@ -1937,11 +1920,25 @@ def build_traversal(
         _from_sep_smaller_min_nsources_cumul=None,
         debug: bool = False) -> FMMTraversalInfo:
     """
+    :arg well_sep_is_n_away: Either An integer 1 or greater.
+        (Only 1 and 2 are tested.)
+        The spacing between boxes that is considered "well-separated" for
+        :attr:`boxtree.traversal.FMMTraversalInfo.from_sep_siblings_starts`
+        (List 2).
+    :arg from_sep_smaller_crit: The criterion used to determine separation
+        box dimensions and separation for
+        :attr:`boxtree.traversal.FMMTraversalInfo.from_sep_smaller_by_level`
+        (List 3). May be one of ``"static_linf"`` (use the box square,
+        possibly enlarged by :attr:`boxtree.Tree.stick_out_factor`),
+        ``"precise_linf"`` (use the precise extent of targets in the box,
+        including their radii), or ``"static_l2"`` (use the circumcircle of
+        the box, possibly enlarged by :attr:`boxtree.Tree.stick_out_factor`).
     :arg source_boxes_mask: Only boxes passing this mask will be considered for
         `source_boxes`. Used by the distributed implementation.
     :arg source_parent_boxes_mask: Only boxes passing this mask will be
         considered for `source_parent_boxes`. Used by the distributed
         implementation.
+
     :return: A :class:`tuple` *(trav, event)*, where *trav* is a new instance of
         :class:`FMMTraversalInfo` and *event* is a :class:`pyopencl.Event`
         for dependency management.

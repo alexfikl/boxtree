@@ -189,9 +189,11 @@ class TranslationClassesBuilder:
             "Use 'build_rotation_classes' instead.",
             DeprecationWarning, stacklevel=2)
 
-        return build_translation_classes(
+        result = build_translation_classes(
             actx, trav, tree,
             is_translation_per_level=is_translation_per_level)
+
+        return result, None
 
 
 @dataclass_array_container

@@ -564,8 +564,10 @@ class AreaQueryBuilder:
             "Use 'build_area_query' instead.",
             DeprecationWarning, stacklevel=2)
 
-        return build_area_query(
+        result = build_area_query(
             actx, tree, ball_centers, ball_radii, peer_lists)
+
+        return result, None
 
 
 @dataclass_array_container
@@ -749,8 +751,10 @@ class LeavesToBallsLookupBuilder:
             "Use 'build_leaves_to_balls_lookup' instead.",
             DeprecationWarning, stacklevel=2)
 
-        return build_leaves_to_balls_lookup(
+        result = build_leaves_to_balls_lookup(
             actx, tree, ball_centers, ball_radii, peer_lists)
+
+        return result, None
 
 
 @dataclass_array_container
@@ -886,8 +890,10 @@ class SpaceInvaderQueryBuilder:
             "Use 'build_space_invader_query' instead.",
             DeprecationWarning, stacklevel=2)
 
-        return build_space_invader_query(
+        result = build_space_invader_query(
             actx, tree, ball_centers, ball_radii, peer_lists)
+
+        return result, None
 
 
 @memoize_on_first_arg

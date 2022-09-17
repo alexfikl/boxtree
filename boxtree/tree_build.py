@@ -48,11 +48,6 @@ class MaxLevelsExceeded(RuntimeError):
 
 
 class TreeBuilder:
-    """
-    .. automethod:: __init__
-    .. automethod:: __call__
-    """
-
     morton_nr_dtype = np.dtype(np.int8)
     box_level_dtype = np.dtype(np.uint8)
     ROOT_EXTENT_STRETCH_FACTOR = 1e-4
@@ -72,7 +67,7 @@ class TreeBuilder:
             "Use 'build_tree' instead.",
             DeprecationWarning, stacklevel=2)
 
-        return build_tree(
+        result = build_tree(
             actx, particles,
             kind=kind, max_particles_in_box=max_particles_in_box,
             targets=targets, source_radii=source_radii, target_radii=target_radii,
@@ -84,6 +79,8 @@ class TreeBuilder:
             box_level_dtype=self.box_level_dtype,
             root_extent_stretch_factor=TreeBuilder.ROOT_EXTENT_STRETCH_FACTOR,
             debug=debug, **kwargs)
+
+        return result, None
 
 
 # {{{ build_tree

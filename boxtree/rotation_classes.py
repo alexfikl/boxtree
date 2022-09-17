@@ -67,7 +67,8 @@ class RotationClassesBuilder:
             "Use 'build_rotation_classes' instead.",
             DeprecationWarning, stacklevel=2)
 
-        return build_rotation_classes(actx, trav, tree)
+        result = build_rotation_classes(actx, trav, tree)
+        return result, None
 
 
 @dataclass_array_container
